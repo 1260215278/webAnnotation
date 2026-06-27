@@ -1,0 +1,15 @@
+.DS_Store
+.superpowers/
+
+# Local planning and progress artifacts. Keep these in the workspace, not git.
+PROGRESS.md
+PROGRESS/
+plan/
+docs/superpowers/specs/
+
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example

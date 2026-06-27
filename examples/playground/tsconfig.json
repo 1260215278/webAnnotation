@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["vite/client"],
+    "paths": {
+      "@web-annotation/core": ["../../packages/annotation-core/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

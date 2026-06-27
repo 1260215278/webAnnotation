@@ -8,6 +8,7 @@ plan/
 docs/superpowers/specs/
 
 node_modules/
+.pnpm-store/
 dist/
 coverage/
 .env

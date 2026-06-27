@@ -9,3 +9,6 @@ Short public milestones for the project. This file intentionally avoids detailed
 - Set the repository rule that local design, plan, and progress files stay out of git.
 - Initialized the remote repository with the submit-boundary `.gitignore`.
 - Added the first public `README.md` and concise development log.
+- Added the first Runtime SDK MVP with DOM selection, floating annotation input, payload creation, and submission hooks.
+- Added a minimal Vite playground for local end-to-end validation.
+- Added typecheck, test, and build verification for the monorepo.

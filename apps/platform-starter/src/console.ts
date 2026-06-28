@@ -44,12 +44,23 @@ export const CONSOLE_MESSAGES = {
     suggestedFilesField: "Suggested files",
     generateAiPatch: "Generate AI patch",
     generateMockPatch: "Generate mock patch",
+    patchReviewHeading: "Review",
+    reviewLabel: "review",
+    reviewStatusField: "Review status",
+    reviewerField: "Reviewer",
+    reviewNoteField: "Note",
+    reviewDecidedAtField: "Decided at",
+    acceptDecision: "Accept",
+    rejectDecision: "Reject",
+    requestChangesDecision: "Request changes",
     loadTasksError: "Failed to load tasks",
     loadTaskError: "Failed to load task",
     aiPatchFailed: "AI patch failed",
     aiPatchRequestFailed: "AI patch request failed",
     mockPatchFailed: "Mock patch failed",
     mockPatchRequestFailed: "Mock patch request failed",
+    reviewFailed: "Review failed",
+    reviewRequestFailed: "Review request failed",
   },
   zh: {
     appTitle: "webAnnotation 任务台",
@@ -86,12 +97,23 @@ export const CONSOLE_MESSAGES = {
     suggestedFilesField: "建议文件",
     generateAiPatch: "生成 AI patch",
     generateMockPatch: "生成 mock patch",
+    patchReviewHeading: "人工评审",
+    reviewLabel: "评审",
+    reviewStatusField: "评审状态",
+    reviewerField: "评审人",
+    reviewNoteField: "备注",
+    reviewDecidedAtField: "评审时间",
+    acceptDecision: "接受",
+    rejectDecision: "拒绝",
+    requestChangesDecision: "要求修改",
     loadTasksError: "加载任务失败",
     loadTaskError: "加载任务失败",
     aiPatchFailed: "AI patch 生成失败",
     aiPatchRequestFailed: "AI patch 请求失败",
     mockPatchFailed: "Mock patch 生成失败",
     mockPatchRequestFailed: "Mock patch 请求失败",
+    reviewFailed: "评审提交失败",
+    reviewRequestFailed: "评审请求失败",
   },
 } as const
 
@@ -128,6 +150,7 @@ export function renderConsoleHtml(): string {
     .source-file h5 { margin: 0 0 0.35rem; font-size: 0.9rem; }
     .issue-list { list-style: disc; padding-left: 1.25rem; margin: 0.25rem 0 0.75rem; }
     .issue-list li { border: 0; padding: 0.15rem 0; font-size: 0.85rem; }
+    .review-actions { margin-top: 0.5rem; }
     .error { color: #b91c1c; padding: 0.5rem 1rem; margin: 0; background: #b91c1c1a; }
     #task-detail { font-size: 0.9rem; }
   </style>
@@ -250,6 +273,7 @@ export function renderConsoleHtml(): string {
         li.appendChild(btn);
         var meta = task.projectId + ' · ' + task.route + ' · ' + t('annotationsLabel') + ': ' + task.annotationCount;
         if (task.patchProposalId) meta += ' · ' + t('proposalIdLabel') + ': ' + task.patchProposalId;
+        if (task.patchReviewStatus) meta += ' · ' + t('reviewLabel') + ': ' + task.patchReviewStatus;
         if (task.sourceContextStatus) {
           meta += ' · ' + t('sourceContextLabel') + ': ' + task.sourceContextStatus;
           meta += ' (' + (task.sourceFileCount || 0) + '/' + (task.sourceIssueCount || 0) + ')';
@@ -346,6 +370,33 @@ export function renderConsoleHtml(): string {
         var pre = el('pre', p.diffPreview);
         pre.className = 'diff';
         detailEl.appendChild(pre);
+
+        detailEl.appendChild(el('h4', t('patchReviewHeading')));
+        if (task.patchReview) {
+          detailEl.appendChild(field(t('reviewStatusField'), task.patchReview.status));
+          if (task.patchReview.reviewer) {
+            detailEl.appendChild(field(t('reviewerField'), task.patchReview.reviewer));
+          }
+          if (task.patchReview.note) {
+            detailEl.appendChild(field(t('reviewNoteField'), task.patchReview.note));
+          }
+          detailEl.appendChild(field(t('reviewDecidedAtField'), task.patchReview.decidedAt));
+        }
+        var reviewActions = el('div');
+        reviewActions.className = 'review-actions';
+        var acceptBtn = el('button', t('acceptDecision'));
+        acceptBtn.className = 'primary';
+        acceptBtn.addEventListener('click', function () { reviewPatch(task.id, 'accept'); });
+        reviewActions.appendChild(acceptBtn);
+        reviewActions.appendChild(document.createTextNode(' '));
+        var rejectBtn = el('button', t('rejectDecision'));
+        rejectBtn.addEventListener('click', function () { reviewPatch(task.id, 'reject'); });
+        reviewActions.appendChild(rejectBtn);
+        reviewActions.appendChild(document.createTextNode(' '));
+        var changesBtn = el('button', t('requestChangesDecision'));
+        changesBtn.addEventListener('click', function () { reviewPatch(task.id, 'changes_requested'); });
+        reviewActions.appendChild(changesBtn);
+        detailEl.appendChild(reviewActions);
       } else {
         var ai = el('button', t('generateAiPatch'));
         ai.className = 'primary';
@@ -389,6 +440,21 @@ export function renderConsoleHtml(): string {
         selectTask(id);
         loadTasks();
       }).catch(function () { showError(t('sourceContextRequestFailed')); });
+    }
+
+    function reviewPatch(id, decision) {
+      clearError();
+      fetch('/api/tasks/' + encodeURIComponent(id) + '/patch-review', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ decision: decision }),
+      }).then(function (r) {
+        return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+      }).then(function (res) {
+        if (!res.ok) { showError(t('reviewFailed') + ': ' + (res.body && res.body.error)); return; }
+        selectTask(id);
+        loadTasks();
+      }).catch(function () { showError(t('reviewRequestFailed')); });
     }
 
     languageSelect.addEventListener('change', function () { setLanguage(languageSelect.value); });

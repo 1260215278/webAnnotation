@@ -15,6 +15,13 @@ import type { Task, TaskStore } from "./store"
 import { buildMockPatchProposal } from "./mockPatch"
 import { buildPatchProviderInput, buildProviderPatchProposal } from "./patchProvider"
 import type { PatchProvider } from "./patchProvider"
+import {
+  PATCH_REVIEW_DECISIONS,
+  buildPatchReview,
+  isPatchReviewDecision,
+  taskStatusForDecision,
+} from "./patchReview"
+import type { PatchReviewInput } from "./patchReview"
 import { renderConsoleHtml } from "./console"
 
 export interface PlatformSourceContextOptions {
@@ -246,6 +253,38 @@ async function proposeProviderPatch(
   }
 }
 
+function reviewPatchProposal(
+  id: string,
+  body: unknown,
+  store: TaskStore,
+  decidedAt: string,
+): PlatformResponse {
+  const task = store.get(id)
+  if (!task) {
+    return { status: 404, body: { error: "task not found", id } }
+  }
+  if (!task.patchProposal) {
+    return { status: 409, body: { error: "patch proposal does not exist", id } }
+  }
+
+  const decision = isObject(body) ? body.decision : undefined
+  if (!isPatchReviewDecision(decision)) {
+    return { status: 400, body: { error: "invalid decision", allowed: PATCH_REVIEW_DECISIONS, id } }
+  }
+
+  const input: PatchReviewInput = { decision }
+  const reviewer = isObject(body) ? body.reviewer : undefined
+  if (typeof reviewer === "string" && reviewer.trim() !== "") input.reviewer = reviewer.trim()
+  const note = isObject(body) ? body.note : undefined
+  if (typeof note === "string" && note.trim() !== "") input.note = note.trim()
+
+  // A repeat review overrides the previous decision; the latest decision wins.
+  const patchReview = buildPatchReview(input, decidedAt)
+  const updated: Task = { ...task, status: taskStatusForDecision(decision), patchReview }
+  store.add(updated)
+  return { status: 200, body: { taskId: updated.id, status: updated.status, patchReview } }
+}
+
 export async function handlePlatformRequest(
   input: PlatformRequest,
   store: TaskStore,
@@ -277,6 +316,12 @@ export async function handlePlatformRequest(
       path.slice("/api/tasks/".length, path.length - "/source-context".length),
     )
     return collectTaskSourceContext(id, store, options)
+  }
+  if (method === "POST" && path.startsWith("/api/tasks/") && path.endsWith("/patch-review")) {
+    const id = decodeURIComponent(
+      path.slice("/api/tasks/".length, path.length - "/patch-review".length),
+    )
+    return reviewPatchProposal(id, input.body, store, new Date().toISOString())
   }
   if (method === "POST" && path.startsWith("/api/tasks/") && path.endsWith("/patch")) {
     const id = decodeURIComponent(path.slice("/api/tasks/".length, path.length - "/patch".length))

@@ -2,10 +2,35 @@ import type { AnnotationPayload } from "@web-annotation/core"
 import type { PatchPromptContext, RepoSourceContext } from "@web-annotation/node"
 
 /** Lifecycle status of an ingested annotation task. */
-export type TaskStatus = "received" | "patch_proposed"
+export type TaskStatus =
+  | "received"
+  | "patch_proposed"
+  | "patch_accepted"
+  | "patch_rejected"
+  | "changes_requested"
 
 /** Status of a mock patch proposal. Only one state in this MVP. */
 export type PatchProposalStatus = "proposed"
+
+/** Human review decision recorded against a patch proposal. */
+export type PatchReviewDecision = "accept" | "reject" | "changes_requested"
+
+/** Outcome stored on the task once a patch proposal has been reviewed. */
+export type PatchReviewStatus = "accepted" | "rejected" | "changes_requested"
+
+/**
+ * A human review decision on a patch proposal. The MVP only records the decision;
+ * it never applies the patch, writes repository files, or calls a Git provider.
+ */
+export interface PatchReview {
+  status: PatchReviewStatus
+  /** ISO timestamp the decision was recorded. */
+  decidedAt: string
+  /** Optional reviewer identity supplied by the caller. */
+  reviewer?: string
+  /** Optional free-text note explaining the decision. */
+  note?: string
+}
 
 /** Compact state of repository source context collection for task listings. */
 export type SourceContextStatus = "not_collected" | "collected" | "issues"
@@ -43,6 +68,8 @@ export interface Task {
   sourceContext?: RepoSourceContext
   /** Present once a mock patch has been proposed for this task. */
   patchProposal?: PatchProposal
+  /** Present once the patch proposal has been reviewed. */
+  patchReview?: PatchReview
 }
 
 /** Compact listing shape returned by `GET /api/tasks`. */
@@ -58,6 +85,8 @@ export interface TaskSummary {
   sourceIssueCount: number
   /** Present once a patch proposal exists. */
   patchProposalId?: string
+  /** Present once the patch proposal has been reviewed. */
+  patchReviewStatus?: PatchReviewStatus
 }
 
 /**
@@ -90,6 +119,7 @@ function toSummary(task: Task): TaskSummary {
     sourceIssueCount,
   }
   if (task.patchProposal) summary.patchProposalId = task.patchProposal.id
+  if (task.patchReview) summary.patchReviewStatus = task.patchReview.status
   return summary
 }
 

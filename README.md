@@ -56,7 +56,8 @@ The Platform Starter ingest API currently supports:
 - `POST /api/tasks/:id/source-context`: collect repository source snippets for a task when the server is configured with a repo root.
 - `POST /api/tasks/:id/patch`: call an injected patch provider to create a patch proposal (idempotent).
 - `POST /api/tasks/:id/mock-patch`: generate a deterministic mock patch proposal, moving the task to `patch_proposed` (idempotent).
-- `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, and triggering provider/mock patches.
+- `POST /api/tasks/:id/patch-review`: record a human `accept` / `reject` / `changes_requested` decision on a proposal (records the decision only; never applies the patch).
+- `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, triggering provider/mock patches, and reviewing proposals.
 - `createHttpPatchProvider(options)`: a generic HTTP adapter for connecting an external AI/custom patch service.
 - In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
 
@@ -284,10 +285,11 @@ Endpoints:
 - `POST /api/tasks/:id/source-context` → collect repo snippets for the task using the configured repo root. Returns `201 { taskId, sourceContext }` on first collection and `200` on repeat calls, refreshing the stored source context each time; `409 { error }` when `repoRoot` is not configured; `404` when the id is unknown.
 - `POST /api/tasks/:id/patch` → call `patchProvider.generatePatch({ task, promptContext, sourceContext })`. Returns `201 { taskId, status, patchProposal }` on first success and `200` with the same proposal on repeats; `409 { error }` when no provider is configured; `502 { error, message }` when the provider fails; `404` when the id is unknown.
 - `POST /api/tasks/:id/mock-patch` → generate a mock patch proposal. Returns `201 { taskId, status, patchProposal }` on first call and `200` with the same proposal on repeats (idempotent); `404` when the id is unknown.
+- `POST /api/tasks/:id/patch-review` → body `{ decision: "accept" | "reject" | "changes_requested", reviewer?, note? }`. Records the decision as `patchReview` and moves the task to `patch_accepted` / `patch_rejected` / `changes_requested`. Returns `200 { taskId, status, patchReview }`; `404` when the id is unknown; `409 { error }` when the task has no patch proposal; `400 { error }` for an invalid or missing decision. A repeat review overrides the previous decision (the latest decision wins).
 
 A task summary includes `sourceContextStatus`, `sourceFileCount`, and `sourceIssueCount`. `sourceContext.files[].file` stays repository-relative; absolute paths are not returned. Source-context collection reads files only through the Node kit safety checks and still performs no AI call, diff generation, repository write, or Git operation.
 
-A task moves through `received → patch_proposed`. The `patchProposal` carries `summary`, `suggestedFiles`, `diffPreview`, `promptContext`, and optional provider `metadata`. The built-in mock path is deterministic and reads no files; the provider path receives `promptContext` and any collected `sourceContext`, but the starter package itself still does not include model keys, model SDKs, repository writes, or Git operations.
+A task moves through `received → patch_proposed → patch_accepted | patch_rejected | changes_requested`. The `patchProposal` carries `summary`, `suggestedFiles`, `diffPreview`, `promptContext`, and optional provider `metadata`. The built-in mock path is deterministic and reads no files; the provider path receives `promptContext` and any collected `sourceContext`, but the starter package itself still does not include model keys, model SDKs, repository writes, or Git operations. A `patchReview` (`status`, `decidedAt`, optional `reviewer`/`note`) records the human decision only — it never applies the patch, writes repository files, or calls a Git provider.
 
 The HTTP provider adapter sends:
 

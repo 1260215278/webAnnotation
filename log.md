@@ -22,3 +22,4 @@ Short public milestones for the project. This file intentionally avoids detailed
 - Integrated repo source-context collection into Platform Starter, including the API endpoint, task summaries, and bilingual console display.
 - Added a pluggable Platform Starter patch provider interface and `/api/tasks/:id/patch` endpoint for future AI-backed proposal generation.
 - Added a generic HTTP patch provider adapter so external AI/custom services can implement the patch proposal protocol.
+- Added a Platform Starter patch proposal review state: `POST /api/tasks/:id/patch-review` records an accept/reject/changes_requested decision (decision only, no patch applied), surfaced in task summaries, detail, and the bilingual console.

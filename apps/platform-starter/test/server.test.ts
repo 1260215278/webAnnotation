@@ -429,6 +429,114 @@ describe("POST /api/tasks/:id/patch", () => {
   })
 })
 
+describe("POST /api/tasks/:id/patch-review", () => {
+  async function createReviewableTask(): Promise<string> {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+    return taskId
+  }
+
+  it("returns 404 for an unknown task", async () => {
+    const res = await request("POST", "/api/tasks/task_missing/patch-review", {
+      decision: "accept",
+    })
+    expect(res.status).toBe(404)
+    expect((res.body as { error: string }).error).toBe("task not found")
+  })
+
+  it("returns 409 when the task has no patch proposal", async () => {
+    const taskId = await createTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch-review`, { decision: "accept" })
+    expect(res.status).toBe(409)
+    expect((res.body as { error: string }).error).toBe("patch proposal does not exist")
+  })
+
+  it("returns 400 for an invalid decision", async () => {
+    const taskId = await createReviewableTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch-review`, { decision: "approve" })
+    expect(res.status).toBe(400)
+    expect((res.body as { error: string }).error).toBe("invalid decision")
+  })
+
+  it("returns 400 when the decision is missing", async () => {
+    const taskId = await createReviewableTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch-review`, {})
+    expect(res.status).toBe(400)
+    expect((res.body as { error: string }).error).toBe("invalid decision")
+  })
+
+  it("accepts a proposal and moves the task to patch_accepted", async () => {
+    const taskId = await createReviewableTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch-review`, {
+      decision: "accept",
+      reviewer: "alice",
+      note: "looks good",
+    })
+    expect(res.status).toBe(200)
+    const body = res.body as {
+      taskId: string
+      status: string
+      patchReview: { status: string; reviewer?: string; note?: string; decidedAt: string }
+    }
+    expect(body.taskId).toBe(taskId)
+    expect(body.status).toBe("patch_accepted")
+    expect(body.patchReview.status).toBe("accepted")
+    expect(body.patchReview.reviewer).toBe("alice")
+    expect(body.patchReview.note).toBe("looks good")
+    expect(typeof body.patchReview.decidedAt).toBe("string")
+  })
+
+  it("rejects a proposal and moves the task to patch_rejected", async () => {
+    const taskId = await createReviewableTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch-review`, { decision: "reject" })
+    expect(res.status).toBe(200)
+    expect((res.body as { status: string }).status).toBe("patch_rejected")
+    expect((res.body as { patchReview: { status: string } }).patchReview.status).toBe("rejected")
+  })
+
+  it("records a changes_requested decision", async () => {
+    const taskId = await createReviewableTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch-review`, {
+      decision: "changes_requested",
+    })
+    expect(res.status).toBe(200)
+    expect((res.body as { status: string }).status).toBe("changes_requested")
+    expect((res.body as { patchReview: { status: string } }).patchReview.status).toBe(
+      "changes_requested",
+    )
+  })
+
+  it("overrides an earlier review on a repeat call", async () => {
+    const taskId = await createReviewableTask()
+    const first = await request("POST", `/api/tasks/${taskId}/patch-review`, { decision: "accept" })
+    const second = await request("POST", `/api/tasks/${taskId}/patch-review`, {
+      decision: "reject",
+      note: "changed my mind",
+    })
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+
+    const detail = await request("GET", `/api/tasks/${taskId}`)
+    const { task } = detail.body as {
+      task: { status: string; patchReview?: { status: string; note?: string } }
+    }
+    expect(task.status).toBe("patch_rejected")
+    expect(task.patchReview?.status).toBe("rejected")
+    expect(task.patchReview?.note).toBe("changed my mind")
+  })
+
+  it("exposes review status in the task summary", async () => {
+    const taskId = await createReviewableTask()
+    await request("POST", `/api/tasks/${taskId}/patch-review`, { decision: "accept" })
+    const list = await request("GET", "/api/tasks")
+    const summary = (
+      list.body as { tasks: { id: string; status: string; patchReviewStatus?: string }[] }
+    ).tasks[0]
+    expect(summary.status).toBe("patch_accepted")
+    expect(summary.patchReviewStatus).toBe("accepted")
+  })
+})
+
 describe("task views expose the proposal", () => {
   it("shows patchProposalId in the summary and the proposal in detail", async () => {
     const taskId = await createTask()

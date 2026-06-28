@@ -27,6 +27,8 @@ export interface PatchProposal {
   diffPreview: string
   /** The prompt context the proposal was built from. */
   promptContext: PatchPromptContext
+  /** Optional provider-specific metadata; never required by platform logic. */
+  metadata?: Record<string, unknown>
 }
 
 export interface Task {

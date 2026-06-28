@@ -10,8 +10,11 @@ describe("renderConsoleHtml", () => {
     expect(html).toContain('id="task-detail"')
     // Wires the existing JSON API and the mock-patch action.
     expect(html).toContain("/api/tasks")
+    expect(html).toContain("/patch")
     expect(html).toContain("/mock-patch")
     expect(html).toContain("/source-context")
+    expect(html).toContain("Generate AI patch")
+    expect(html).toContain("生成 AI patch")
     expect(html).toContain("Generate mock patch")
     expect(html).toContain("生成 mock patch")
     expect(html).toContain("Collect source context")

@@ -13,6 +13,8 @@ import type { RepoSourceContextOptions } from "@web-annotation/node"
 import { createTaskStore } from "./store"
 import type { Task, TaskStore } from "./store"
 import { buildMockPatchProposal } from "./mockPatch"
+import { buildPatchProviderInput, buildProviderPatchProposal } from "./patchProvider"
+import type { PatchProvider } from "./patchProvider"
 import { renderConsoleHtml } from "./console"
 
 export interface PlatformSourceContextOptions {
@@ -26,6 +28,8 @@ export interface PlatformRuntimeOptions {
   repoRoot?: string
   /** Optional limits for repository source-context collection. */
   sourceContext?: PlatformSourceContextOptions
+  /** Optional AI/provider integration hook. The starter never calls a model by default. */
+  patchProvider?: PatchProvider
 }
 
 export interface PlatformServerOptions extends PlatformRuntimeOptions {
@@ -199,6 +203,49 @@ function collectTaskSourceContext(
   return { status, body: { taskId: updated.id, sourceContext } }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown provider error"
+}
+
+async function proposeProviderPatch(
+  id: string,
+  store: TaskStore,
+  options: PlatformRuntimeOptions = {},
+): Promise<PlatformResponse> {
+  const task = store.get(id)
+  if (!task) {
+    return { status: 404, body: { error: "task not found", id } }
+  }
+  // Idempotent: an existing proposal is returned as-is, never regenerated.
+  if (task.patchProposal) {
+    return {
+      status: 200,
+      body: { taskId: task.id, status: task.status, patchProposal: task.patchProposal },
+    }
+  }
+  if (!options.patchProvider) {
+    return { status: 409, body: { error: "patch provider is not configured", id } }
+  }
+
+  let result
+  try {
+    result = await options.patchProvider.generatePatch(buildPatchProviderInput(task))
+  } catch (error) {
+    return {
+      status: 502,
+      body: { error: "patch provider failed", message: errorMessage(error), id },
+    }
+  }
+
+  const patchProposal = buildProviderPatchProposal(task, result, new Date().toISOString())
+  const updated: Task = { ...task, status: "patch_proposed", patchProposal }
+  store.add(updated)
+  return {
+    status: 201,
+    body: { taskId: updated.id, status: updated.status, patchProposal },
+  }
+}
+
 export async function handlePlatformRequest(
   input: PlatformRequest,
   store: TaskStore,
@@ -230,6 +277,10 @@ export async function handlePlatformRequest(
       path.slice("/api/tasks/".length, path.length - "/source-context".length),
     )
     return collectTaskSourceContext(id, store, options)
+  }
+  if (method === "POST" && path.startsWith("/api/tasks/") && path.endsWith("/patch")) {
+    const id = decodeURIComponent(path.slice("/api/tasks/".length, path.length - "/patch".length))
+    return proposeProviderPatch(id, store, options)
   }
   if (method === "GET" && path.startsWith("/api/tasks/")) {
     const id = decodeURIComponent(path.slice("/api/tasks/".length))
@@ -287,6 +338,7 @@ export function createPlatformServer(options: PlatformServerOptions = {}): Platf
   const runtimeOptions: PlatformRuntimeOptions = {
     repoRoot: options.repoRoot,
     sourceContext: options.sourceContext,
+    patchProvider: options.patchProvider,
   }
   const server = createServer((req, res) => {
     handleHttpRequest(req, res, store, maxBodyBytes, runtimeOptions).catch((error) => {

@@ -42,9 +42,12 @@ export const CONSOLE_MESSAGES = {
     patchProposalHeading: "Patch proposal",
     summaryField: "Summary",
     suggestedFilesField: "Suggested files",
+    generateAiPatch: "Generate AI patch",
     generateMockPatch: "Generate mock patch",
     loadTasksError: "Failed to load tasks",
     loadTaskError: "Failed to load task",
+    aiPatchFailed: "AI patch failed",
+    aiPatchRequestFailed: "AI patch request failed",
     mockPatchFailed: "Mock patch failed",
     mockPatchRequestFailed: "Mock patch request failed",
   },
@@ -81,9 +84,12 @@ export const CONSOLE_MESSAGES = {
     patchProposalHeading: "补丁建议",
     summaryField: "摘要",
     suggestedFilesField: "建议文件",
+    generateAiPatch: "生成 AI patch",
     generateMockPatch: "生成 mock patch",
     loadTasksError: "加载任务失败",
     loadTaskError: "加载任务失败",
+    aiPatchFailed: "AI patch 生成失败",
+    aiPatchRequestFailed: "AI patch 请求失败",
     mockPatchFailed: "Mock patch 生成失败",
     mockPatchRequestFailed: "Mock patch 请求失败",
   },
@@ -341,11 +347,26 @@ export function renderConsoleHtml(): string {
         pre.className = 'diff';
         detailEl.appendChild(pre);
       } else {
-        var gen = el('button', t('generateMockPatch'));
-        gen.className = 'primary';
-        gen.addEventListener('click', function () { generatePatch(task.id); });
-        detailEl.appendChild(gen);
+        var ai = el('button', t('generateAiPatch'));
+        ai.className = 'primary';
+        ai.addEventListener('click', function () { generateAiPatch(task.id); });
+        detailEl.appendChild(ai);
+        detailEl.appendChild(document.createTextNode(' '));
+        var mock = el('button', t('generateMockPatch'));
+        mock.addEventListener('click', function () { generatePatch(task.id); });
+        detailEl.appendChild(mock);
       }
+    }
+
+    function generateAiPatch(id) {
+      clearError();
+      fetch('/api/tasks/' + encodeURIComponent(id) + '/patch', { method: 'POST' }).then(function (r) {
+        return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+      }).then(function (res) {
+        if (!res.ok) { showError(t('aiPatchFailed') + ': ' + (res.body && res.body.error)); return; }
+        selectTask(id);
+        loadTasks();
+      }).catch(function () { showError(t('aiPatchRequestFailed')); });
     }
 
     function generatePatch(id) {

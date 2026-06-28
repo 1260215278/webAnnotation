@@ -20,3 +20,4 @@ Short public milestones for the project. This file intentionally avoids detailed
 - Added a minimal bilingual static-HTML task console (served at `/` and `/console`) for browsing tasks, viewing details, and triggering mock patches without curl.
 - Added the Node kit repo source context helper: safely reads repo source snippets referenced by annotation source metadata, with path-traversal, oversize, and binary protection.
 - Integrated repo source-context collection into Platform Starter, including the API endpoint, task summaries, and bilingual console display.
+- Added a pluggable Platform Starter patch provider interface and `/api/tasks/:id/patch` endpoint for future AI-backed proposal generation.

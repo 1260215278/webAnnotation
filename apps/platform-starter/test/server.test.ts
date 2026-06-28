@@ -18,6 +18,25 @@ type TestRuntimeOptions = {
     maxFiles?: number
     maxBytesPerFile?: number
   }
+  patchProvider?: {
+    generatePatch: (input: {
+      task: unknown
+      promptContext: unknown
+      sourceContext?: { files: { file: string }[]; issues: unknown[] }
+    }) =>
+      | {
+          summary: string
+          suggestedFiles: string[]
+          diffPreview: string
+          metadata?: Record<string, unknown>
+        }
+      | Promise<{
+          summary: string
+          suggestedFiles: string[]
+          diffPreview: string
+          metadata?: Record<string, unknown>
+        }>
+  }
 }
 
 function request(
@@ -302,6 +321,111 @@ describe("POST /api/tasks/:id/source-context", () => {
       code: "path_escape",
       file: "../package.json",
     })
+  })
+})
+
+describe("POST /api/tasks/:id/patch", () => {
+  it("returns a readable error when patchProvider is not configured", async () => {
+    const taskId = await createTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch`)
+    expect(res.status).toBe(409)
+    expect((res.body as { error: string }).error).toBe("patch provider is not configured")
+  })
+
+  it("uses the configured provider and passes source context into the provider input", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/source-context`, undefined, {
+      repoRoot: viteReactRoot,
+    })
+    let providerSourceFile = ""
+    const res = await request("POST", `/api/tasks/${taskId}/patch`, undefined, {
+      patchProvider: {
+        generatePatch(input) {
+          providerSourceFile = input.sourceContext?.files[0]?.file ?? ""
+          return {
+            summary: "AI patch: update the submit button copy.",
+            suggestedFiles: ["src/App.tsx"],
+            diffPreview: "--- a/src/App.tsx\n+++ b/src/App.tsx\n@@\n- Submit\n+ Save settings",
+            metadata: { provider: "test" },
+          }
+        },
+      },
+    })
+
+    expect(res.status).toBe(201)
+    expect(providerSourceFile).toBe("src/App.tsx")
+    const body = res.body as {
+      taskId: string
+      status: string
+      patchProposal: { summary: string; suggestedFiles: string[]; metadata?: Record<string, unknown> }
+    }
+    expect(body.taskId).toBe(taskId)
+    expect(body.status).toBe("patch_proposed")
+    expect(body.patchProposal.summary).toContain("AI patch")
+    expect(body.patchProposal.suggestedFiles).toEqual(["src/App.tsx"])
+    expect(body.patchProposal.metadata).toEqual({ provider: "test" })
+
+    const detail = await request("GET", `/api/tasks/${taskId}`)
+    const { task } = detail.body as { task: { status: string; patchProposal?: { summary: string } } }
+    expect(task.status).toBe("patch_proposed")
+    expect(task.patchProposal?.summary).toContain("AI patch")
+  })
+
+  it("is idempotent and does not call the provider again for an existing proposal", async () => {
+    const taskId = await createTask()
+    let callCount = 0
+    const options: TestRuntimeOptions = {
+      patchProvider: {
+        generatePatch() {
+          callCount += 1
+          return {
+            summary: `AI patch call ${callCount}`,
+            suggestedFiles: ["src/App.tsx"],
+            diffPreview: "provider diff",
+          }
+        },
+      },
+    }
+
+    const first = await request("POST", `/api/tasks/${taskId}/patch`, undefined, options)
+    const second = await request("POST", `/api/tasks/${taskId}/patch`, undefined, options)
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(200)
+    expect(callCount).toBe(1)
+    expect((second.body as { patchProposal: unknown }).patchProposal).toEqual(
+      (first.body as { patchProposal: unknown }).patchProposal,
+    )
+  })
+
+  it("returns a readable error when the provider fails and leaves the task unmodified", async () => {
+    const taskId = await createTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch`, undefined, {
+      patchProvider: {
+        generatePatch() {
+          throw new Error("model timeout")
+        },
+      },
+    })
+
+    expect(res.status).toBe(502)
+    expect((res.body as { error: string; message: string }).error).toBe("patch provider failed")
+    expect((res.body as { error: string; message: string }).message).toBe("model timeout")
+    const detail = await request("GET", `/api/tasks/${taskId}`)
+    const { task } = detail.body as { task: { status: string; patchProposal?: unknown } }
+    expect(task.status).toBe("received")
+    expect(task.patchProposal).toBeUndefined()
+  })
+
+  it("returns 404 for an unknown task", async () => {
+    const res = await request("POST", "/api/tasks/task_missing/patch", undefined, {
+      patchProvider: {
+        generatePatch() {
+          return { summary: "unused", suggestedFiles: [], diffPreview: "" }
+        },
+      },
+    })
+    expect(res.status).toBe(404)
+    expect((res.body as { error: string }).error).toBe("task not found")
   })
 })
 

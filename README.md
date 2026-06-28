@@ -54,15 +54,16 @@ The Platform Starter ingest API currently supports:
 - `GET /api/tasks`: list task summaries (including `status`, source-context counts, and any `patchProposalId`).
 - `GET /api/tasks/:id`: fetch task detail, including the generated prompt context, any source context, and any patch proposal.
 - `POST /api/tasks/:id/source-context`: collect repository source snippets for a task when the server is configured with a repo root.
+- `POST /api/tasks/:id/patch`: call an injected patch provider to create a patch proposal (idempotent).
 - `POST /api/tasks/:id/mock-patch`: generate a deterministic mock patch proposal, moving the task to `patch_proposed` (idempotent).
-- `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, and triggering mock patches.
+- `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, and triggering provider/mock patches.
 - In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
 
 Still planned:
 
 - Screenshot capture.
 - Vue SFC source metadata injection.
-- Real AI patch generation (replacing the mock) and a production-grade task-console workflow.
+- Built-in model provider adapters and a production-grade task-console workflow.
 - Persistent storage for the platform.
 - CLI patch workflow.
 - npm publishing.
@@ -244,7 +245,7 @@ Safety is enforced: only relative paths from the context are accepted; absolute 
 
 ## Platform Starter (Ingest API)
 
-`apps/platform-starter` is a minimal HTTP ingest service built on Node's built-in `http` and the Node protocol kit. It receives payloads, validates them, resolves safe-mode sources, collects source snippets from a configured local repo, and stores tasks in memory. It performs no AI calls and uses no database.
+`apps/platform-starter` is a minimal HTTP ingest service built on Node's built-in `http` and the Node protocol kit. It receives payloads, validates them, resolves safe-mode sources, collects source snippets from a configured local repo, calls an optional host-provided patch provider, and stores tasks in memory. It ships no built-in model provider and uses no database.
 
 Run it locally:
 
@@ -260,7 +261,7 @@ WEB_ANNOTATION_REPO_ROOT=/abs/path/to/your/repo pnpm --filter @web-annotation/pl
 # REPO_ROOT is also supported when WEB_ANNOTATION_REPO_ROOT is not set.
 ```
 
-Then open the task console at `http://localhost:4319/console` (also served at `/`). The console is a single static HTML page (vanilla JS, no framework) with Chinese/English UI switching. It lists tasks, shows a task's payload/prompt-context detail, triggers source-context collection, triggers `mock-patch` for tasks without a proposal, and renders source snippets, source issues, proposal `summary`, `suggestedFiles`, and `diffPreview`. Use it for local verification instead of `curl`.
+Then open the task console at `http://localhost:4319/console` (also served at `/`). The console is a single static HTML page (vanilla JS, no framework) with Chinese/English UI switching. It lists tasks, shows a task's payload/prompt-context detail, triggers source-context collection, triggers provider-backed `patch` or deterministic `mock-patch` for tasks without a proposal, and renders source snippets, source issues, proposal `summary`, `suggestedFiles`, and `diffPreview`. Use it for local verification instead of `curl`.
 
 Endpoints:
 
@@ -270,11 +271,12 @@ Endpoints:
 - `GET /api/tasks` → `{ tasks: TaskSummary[] }`.
 - `GET /api/tasks/:id` → `{ task }`, or `404` when the id is unknown.
 - `POST /api/tasks/:id/source-context` → collect repo snippets for the task using the configured repo root. Returns `201 { taskId, sourceContext }` on first collection and `200` on repeat calls, refreshing the stored source context each time; `409 { error }` when `repoRoot` is not configured; `404` when the id is unknown.
+- `POST /api/tasks/:id/patch` → call `patchProvider.generatePatch({ task, promptContext, sourceContext })`. Returns `201 { taskId, status, patchProposal }` on first success and `200` with the same proposal on repeats; `409 { error }` when no provider is configured; `502 { error, message }` when the provider fails; `404` when the id is unknown.
 - `POST /api/tasks/:id/mock-patch` → generate a mock patch proposal. Returns `201 { taskId, status, patchProposal }` on first call and `200` with the same proposal on repeats (idempotent); `404` when the id is unknown.
 
 A task summary includes `sourceContextStatus`, `sourceFileCount`, and `sourceIssueCount`. `sourceContext.files[].file` stays repository-relative; absolute paths are not returned. Source-context collection reads files only through the Node kit safety checks and still performs no AI call, diff generation, repository write, or Git operation.
 
-A task moves through `received → patch_proposed`. The `patchProposal` carries a deterministic `summary`, `suggestedFiles` (the source file when known, otherwise the element's `cssPath`/`selector`), and a readable mock `diffPreview`. It is a stand-in for the planned AI patch step: no AI is called and mock patch generation does not read or modify repository files.
+A task moves through `received → patch_proposed`. The `patchProposal` carries `summary`, `suggestedFiles`, `diffPreview`, `promptContext`, and optional provider `metadata`. The built-in mock path is deterministic and reads no files; the provider path receives `promptContext` and any collected `sourceContext`, but the starter package itself still does not include model keys, model SDKs, repository writes, or Git operations.
 
 The server is exposed as a factory for tests and embedding:
 
@@ -282,7 +284,17 @@ The server is exposed as a factory for tests and embedding:
 import { createPlatformServer } from "@web-annotation/platform-starter"
 
 const { server, store } = createPlatformServer({
-  repoRoot: "/abs/path/to/your/repo"
+  repoRoot: "/abs/path/to/your/repo",
+  patchProvider: {
+    async generatePatch({ promptContext, sourceContext }) {
+      return {
+        summary: `Patch for ${promptContext.annotations.length} annotation(s).`,
+        suggestedFiles: sourceContext?.files.map((file) => file.file) ?? [],
+        diffPreview: "Provider-generated diff preview goes here.",
+        metadata: { provider: "your-provider" }
+      }
+    }
+  }
 })
 server.listen(4319)
 ```

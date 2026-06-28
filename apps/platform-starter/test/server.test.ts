@@ -1,16 +1,37 @@
+import { fileURLToPath } from "node:url"
 import { beforeEach, describe, expect, it } from "vitest"
 import { createTaskStore, handlePlatformRequest } from "../src/index"
 import type { PlatformResponse, TaskStore } from "../src/index"
 import { makeManifest, makeSafePayload, makeSourcePayload } from "./fixtures"
 
 let store: TaskStore
+const viteReactRoot = fileURLToPath(new URL("../../../examples/vite-react", import.meta.url))
 
 beforeEach(() => {
   store = createTaskStore()
 })
 
-function request(method: string, path: string, body?: unknown): Promise<PlatformResponse> {
-  return handlePlatformRequest({ method, path, body }, store)
+type TestRuntimeOptions = {
+  repoRoot?: string
+  sourceContext?: {
+    contextLines?: number
+    maxFiles?: number
+    maxBytesPerFile?: number
+  }
+}
+
+function request(
+  method: string,
+  path: string,
+  body?: unknown,
+  options?: TestRuntimeOptions,
+): Promise<PlatformResponse> {
+  const requestHandler = handlePlatformRequest as (
+    input: { method: string; path: string; body?: unknown },
+    store: TaskStore,
+    options?: TestRuntimeOptions,
+  ) => Promise<PlatformResponse>
+  return requestHandler({ method, path, body }, store, options)
 }
 
 describe("GET /health", () => {
@@ -171,6 +192,116 @@ describe("POST /api/tasks/:id/mock-patch", () => {
     expect(res.status).toBe(201)
     const { patchProposal } = res.body as { patchProposal: { suggestedFiles: string[] } }
     expect(patchProposal.suggestedFiles).toContain("#save")
+  })
+})
+
+describe("POST /api/tasks/:id/source-context", () => {
+  it("returns a readable error when repoRoot is not configured", async () => {
+    const taskId = await createTask()
+    const res = await request("POST", `/api/tasks/${taskId}/source-context`)
+    expect(res.status).toBe(409)
+    expect((res.body as { error: string }).error).toBe("repo root is not configured")
+  })
+
+  it("collects source context, stores it on the task, and exposes summary counts", async () => {
+    const taskId = await createTask()
+    const res = await request("POST", `/api/tasks/${taskId}/source-context`, undefined, {
+      repoRoot: viteReactRoot,
+      sourceContext: { contextLines: 1 },
+    })
+
+    expect(res.status).toBe(201)
+    const body = res.body as {
+      taskId: string
+      sourceContext: {
+        files: { file: string; startLine: number; endLine: number; content: string }[]
+        issues: unknown[]
+      }
+    }
+    expect(body.taskId).toBe(taskId)
+    expect(body.sourceContext.files[0]).toMatchObject({
+      file: "src/App.tsx",
+      startLine: 24,
+      endLine: 26,
+    })
+    expect(body.sourceContext.files[0].content).toContain('<button type="button">Submit</button>')
+    expect(JSON.stringify(body.sourceContext)).not.toContain(viteReactRoot)
+
+    const detail = await request("GET", `/api/tasks/${taskId}`)
+    expect(detail.status).toBe(200)
+    const detailTask = (detail.body as { task: { sourceContext?: unknown } }).task
+    expect(detailTask.sourceContext).toEqual(body.sourceContext)
+
+    const list = await request("GET", "/api/tasks")
+    const summary = (
+      list.body as {
+        tasks: {
+          id: string
+          sourceContextStatus?: string
+          sourceFileCount?: number
+          sourceIssueCount?: number
+        }[]
+      }
+    ).tasks[0]
+    expect(summary).toMatchObject({
+      id: taskId,
+      sourceContextStatus: "collected",
+      sourceFileCount: 1,
+      sourceIssueCount: 0,
+    })
+  })
+
+  it("returns 200 and refreshes the stored source context on repeat calls", async () => {
+    const taskId = await createTask()
+    const first = await request("POST", `/api/tasks/${taskId}/source-context`, undefined, {
+      repoRoot: viteReactRoot,
+    })
+    const second = await request("POST", `/api/tasks/${taskId}/source-context`, undefined, {
+      repoRoot: viteReactRoot,
+    })
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(200)
+    expect((second.body as { sourceContext: unknown }).sourceContext).toEqual(
+      (first.body as { sourceContext: unknown }).sourceContext,
+    )
+  })
+
+  it("returns 404 for an unknown task", async () => {
+    const res = await request("POST", "/api/tasks/task_missing/source-context", undefined, {
+      repoRoot: viteReactRoot,
+    })
+    expect(res.status).toBe(404)
+    expect((res.body as { error: string }).error).toBe("task not found")
+  })
+
+  it("stores Node Kit issues for unsafe source paths without leaking absolute paths", async () => {
+    const payload = makeSourcePayload()
+    payload.annotations[0].target.source = {
+      mode: "source",
+      sourceId: "s_19cu8m6",
+      file: "../package.json",
+      line: 25,
+      column: 9,
+      component: "App",
+      framework: "react",
+    }
+    const taskId = await createTask(payload)
+    const res = await request("POST", `/api/tasks/${taskId}/source-context`, undefined, {
+      repoRoot: viteReactRoot,
+    })
+
+    expect(res.status).toBe(201)
+    const serialized = JSON.stringify(res.body)
+    expect(serialized).toContain("path_escape")
+    expect(serialized).not.toContain(viteReactRoot)
+    const sourceContext = (res.body as {
+      sourceContext: { files: unknown[]; issues: { code: string; file?: string }[] }
+    }).sourceContext
+    expect(sourceContext.files).toEqual([])
+    expect(sourceContext.issues[0]).toMatchObject({
+      code: "path_escape",
+      file: "../package.json",
+    })
   })
 })
 

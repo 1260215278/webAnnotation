@@ -6,8 +6,10 @@ export { renderConsoleHtml } from "./console"
 export type {
   PlatformRequest,
   PlatformResponse,
+  PlatformRuntimeOptions,
   PlatformServer,
   PlatformServerOptions,
+  PlatformSourceContextOptions,
 } from "./server"
 export type {
   Task,
@@ -16,4 +18,5 @@ export type {
   TaskStore,
   PatchProposal,
   PatchProposalStatus,
+  SourceContextStatus,
 } from "./store"

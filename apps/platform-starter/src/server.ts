@@ -5,15 +5,30 @@ import {
   AnnotationPayloadError,
   assertAnnotationPayload,
   buildPatchPromptContext,
+  collectRepoSourceContext,
   resolvePayloadSources,
   validateSourceManifest,
 } from "@web-annotation/node"
+import type { RepoSourceContextOptions } from "@web-annotation/node"
 import { createTaskStore } from "./store"
 import type { Task, TaskStore } from "./store"
 import { buildMockPatchProposal } from "./mockPatch"
 import { renderConsoleHtml } from "./console"
 
-export interface PlatformServerOptions {
+export interface PlatformSourceContextOptions {
+  contextLines?: RepoSourceContextOptions["contextLines"]
+  maxFiles?: RepoSourceContextOptions["maxFiles"]
+  maxBytesPerFile?: RepoSourceContextOptions["maxBytesPerFile"]
+}
+
+export interface PlatformRuntimeOptions {
+  /** Absolute path to the repository root used for source-context collection. */
+  repoRoot?: string
+  /** Optional limits for repository source-context collection. */
+  sourceContext?: PlatformSourceContextOptions
+}
+
+export interface PlatformServerOptions extends PlatformRuntimeOptions {
   /** Inject a custom store (e.g. for tests or a future persistent backend). */
   store?: TaskStore
   /** Max accepted HTTP JSON body size in bytes. Default: 1 MiB. */
@@ -161,9 +176,33 @@ function proposeMockPatch(id: string, store: TaskStore): PlatformResponse {
   }
 }
 
+function collectTaskSourceContext(
+  id: string,
+  store: TaskStore,
+  options: PlatformRuntimeOptions = {},
+): PlatformResponse {
+  const task = store.get(id)
+  if (!task) {
+    return { status: 404, body: { error: "task not found", id } }
+  }
+  if (!options.repoRoot) {
+    return { status: 409, body: { error: "repo root is not configured", id } }
+  }
+
+  const sourceContext = collectRepoSourceContext(task.promptContext, {
+    rootDir: options.repoRoot,
+    ...options.sourceContext,
+  })
+  const status = task.sourceContext ? 200 : 201
+  const updated: Task = { ...task, sourceContext }
+  store.add(updated)
+  return { status, body: { taskId: updated.id, sourceContext } }
+}
+
 export async function handlePlatformRequest(
   input: PlatformRequest,
   store: TaskStore,
+  options: PlatformRuntimeOptions = {},
 ): Promise<PlatformResponse> {
   const method = input.method ?? "GET"
   const path = input.path
@@ -186,6 +225,12 @@ export async function handlePlatformRequest(
     )
     return proposeMockPatch(id, store)
   }
+  if (method === "POST" && path.startsWith("/api/tasks/") && path.endsWith("/source-context")) {
+    const id = decodeURIComponent(
+      path.slice("/api/tasks/".length, path.length - "/source-context".length),
+    )
+    return collectTaskSourceContext(id, store, options)
+  }
   if (method === "GET" && path.startsWith("/api/tasks/")) {
     const id = decodeURIComponent(path.slice("/api/tasks/".length))
     const task = store.get(id)
@@ -203,6 +248,7 @@ async function handleHttpRequest(
   res: ServerResponse,
   store: TaskStore,
   maxBodyBytes: number,
+  options: PlatformRuntimeOptions,
 ): Promise<void> {
   const method = req.method ?? "GET"
   const path = new URL(req.url ?? "/", "http://localhost").pathname
@@ -220,7 +266,7 @@ async function handleHttpRequest(
     }
   }
 
-  const response = await handlePlatformRequest({ method, path, body }, store)
+  const response = await handlePlatformRequest({ method, path, body }, store, options)
   const contentType = response.contentType ?? "application/json; charset=utf-8"
   res.writeHead(response.status, { "content-type": contentType })
   res.end(
@@ -238,8 +284,12 @@ async function handleHttpRequest(
 export function createPlatformServer(options: PlatformServerOptions = {}): PlatformServer {
   const store = options.store ?? createTaskStore()
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
+  const runtimeOptions: PlatformRuntimeOptions = {
+    repoRoot: options.repoRoot,
+    sourceContext: options.sourceContext,
+  }
   const server = createServer((req, res) => {
-    handleHttpRequest(req, res, store, maxBodyBytes).catch((error) => {
+    handleHttpRequest(req, res, store, maxBodyBytes, runtimeOptions).catch((error) => {
       console.error("[platform-starter] request failed", error)
       if (!res.headersSent) {
         sendJson(res, 500, { error: "internal server error" })

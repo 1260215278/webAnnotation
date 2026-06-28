@@ -13,7 +13,7 @@ The repository currently includes:
 - `@web-annotation/core`: browser Runtime SDK.
 - `@web-annotation/vite`: Vite plugin for React JSX/TSX source metadata.
 - `@web-annotation/node`: Node-side protocol kit for payload validation and AI patch context.
-- `apps/platform-starter`: a minimal HTTP ingest API (plus a bilingual static task console) that validates payloads, stores tasks, and proposes mock patches.
+- `apps/platform-starter`: a minimal HTTP ingest API (plus a bilingual static task console) that validates payloads, stores tasks, collects repo source context, and proposes mock patches.
 - `examples/playground`: a minimal Vite page for local verification.
 - `examples/vite-react`: a React + Vite example showing DOM-to-source payloads.
 - TypeScript typecheck, unit tests, and build scripts.
@@ -51,17 +51,18 @@ The Platform Starter ingest API currently supports:
 
 - `GET /health`: liveness check.
 - `POST /api/annotations`: validate a payload (optionally `{ payload, manifest }`), resolve safe-mode sources, store a task, and return `{ taskId, status }`.
-- `GET /api/tasks`: list task summaries (including `status` and any `patchProposalId`).
-- `GET /api/tasks/:id`: fetch task detail, including the generated prompt context and any patch proposal.
+- `GET /api/tasks`: list task summaries (including `status`, source-context counts, and any `patchProposalId`).
+- `GET /api/tasks/:id`: fetch task detail, including the generated prompt context, any source context, and any patch proposal.
+- `POST /api/tasks/:id/source-context`: collect repository source snippets for a task when the server is configured with a repo root.
 - `POST /api/tasks/:id/mock-patch`: generate a deterministic mock patch proposal, moving the task to `patch_proposed` (idempotent).
-- `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, and triggering mock patches.
+- `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, and triggering mock patches.
 - In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
 
 Still planned:
 
 - Screenshot capture.
 - Vue SFC source metadata injection.
-- Real AI patch generation (replacing the mock) and a full task-console UI.
+- Real AI patch generation (replacing the mock) and a production-grade task-console workflow.
 - Persistent storage for the platform.
 - CLI patch workflow.
 - npm publishing.
@@ -243,7 +244,7 @@ Safety is enforced: only relative paths from the context are accepted; absolute 
 
 ## Platform Starter (Ingest API)
 
-`apps/platform-starter` is a minimal HTTP ingest service built on Node's built-in `http` and the Node protocol kit. It receives payloads, validates them, resolves safe-mode sources, and stores tasks in memory. It performs no AI calls and uses no database.
+`apps/platform-starter` is a minimal HTTP ingest service built on Node's built-in `http` and the Node protocol kit. It receives payloads, validates them, resolves safe-mode sources, collects source snippets from a configured local repo, and stores tasks in memory. It performs no AI calls and uses no database.
 
 Run it locally:
 
@@ -252,7 +253,14 @@ pnpm --filter @web-annotation/platform-starter dev
 # defaults to http://localhost:4319 (override with PORT)
 ```
 
-Then open the task console at `http://localhost:4319/console` (also served at `/`). The console is a single static HTML page (vanilla JS, no framework) with Chinese/English UI switching. It lists tasks, shows a task's payload/prompt-context detail, triggers `mock-patch` for tasks without a proposal, and renders the proposal `summary`, `suggestedFiles`, and `diffPreview`. Use it for local verification instead of `curl`.
+Enable repo source-context collection by pointing the starter at a local checkout:
+
+```sh
+WEB_ANNOTATION_REPO_ROOT=/abs/path/to/your/repo pnpm --filter @web-annotation/platform-starter dev
+# REPO_ROOT is also supported when WEB_ANNOTATION_REPO_ROOT is not set.
+```
+
+Then open the task console at `http://localhost:4319/console` (also served at `/`). The console is a single static HTML page (vanilla JS, no framework) with Chinese/English UI switching. It lists tasks, shows a task's payload/prompt-context detail, triggers source-context collection, triggers `mock-patch` for tasks without a proposal, and renders source snippets, source issues, proposal `summary`, `suggestedFiles`, and `diffPreview`. Use it for local verification instead of `curl`.
 
 Endpoints:
 
@@ -261,16 +269,21 @@ Endpoints:
 - `POST /api/annotations` → body is either a bare `AnnotationPayload v1` or `{ payload, manifest }`. Returns `201 { taskId, status }`, or `400 { error, issues }` on invalid input.
 - `GET /api/tasks` → `{ tasks: TaskSummary[] }`.
 - `GET /api/tasks/:id` → `{ task }`, or `404` when the id is unknown.
+- `POST /api/tasks/:id/source-context` → collect repo snippets for the task using the configured repo root. Returns `201 { taskId, sourceContext }` on first collection and `200` on repeat calls, refreshing the stored source context each time; `409 { error }` when `repoRoot` is not configured; `404` when the id is unknown.
 - `POST /api/tasks/:id/mock-patch` → generate a mock patch proposal. Returns `201 { taskId, status, patchProposal }` on first call and `200` with the same proposal on repeats (idempotent); `404` when the id is unknown.
 
-A task moves through `received → patch_proposed`. The `patchProposal` carries a deterministic `summary`, `suggestedFiles` (the source file when known, otherwise the element's `cssPath`/`selector`), and a readable mock `diffPreview`. It is a stand-in for the planned AI patch step: no AI is called and no repository files are read.
+A task summary includes `sourceContextStatus`, `sourceFileCount`, and `sourceIssueCount`. `sourceContext.files[].file` stays repository-relative; absolute paths are not returned. Source-context collection reads files only through the Node kit safety checks and still performs no AI call, diff generation, repository write, or Git operation.
+
+A task moves through `received → patch_proposed`. The `patchProposal` carries a deterministic `summary`, `suggestedFiles` (the source file when known, otherwise the element's `cssPath`/`selector`), and a readable mock `diffPreview`. It is a stand-in for the planned AI patch step: no AI is called and mock patch generation does not read or modify repository files.
 
 The server is exposed as a factory for tests and embedding:
 
 ```ts
 import { createPlatformServer } from "@web-annotation/platform-starter"
 
-const { server, store } = createPlatformServer()
+const { server, store } = createPlatformServer({
+  repoRoot: "/abs/path/to/your/repo"
+})
 server.listen(4319)
 ```
 
@@ -343,6 +356,7 @@ packages/
 
 apps/
   platform-starter/      Current minimal HTTP ingest API + bilingual static task console
+                         + repo source-context collection
 examples/
   playground/            Current local SDK verification page
   vite-react/            Current React source metadata verification page
@@ -354,7 +368,8 @@ The intended full workflow is:
 
 ```text
 select DOM -> write annotation -> submit payload -> backend stores task
--> AI proposes patch -> human reviews -> PR/MR or CLI apply
+-> collect repo source context -> AI proposes patch -> human reviews
+-> PR/MR or CLI apply
 ```
 
 The browser SDK does not include model keys, repository tokens, or backend secrets. AI and repository access belong on the configured backend or platform layer.

@@ -1,11 +1,14 @@
 import type { AnnotationPayload } from "@web-annotation/core"
-import type { PatchPromptContext } from "@web-annotation/node"
+import type { PatchPromptContext, RepoSourceContext } from "@web-annotation/node"
 
 /** Lifecycle status of an ingested annotation task. */
 export type TaskStatus = "received" | "patch_proposed"
 
 /** Status of a mock patch proposal. Only one state in this MVP. */
 export type PatchProposalStatus = "proposed"
+
+/** Compact state of repository source context collection for task listings. */
+export type SourceContextStatus = "not_collected" | "collected" | "issues"
 
 /**
  * A mock, non-applyable patch suggestion derived deterministically from a task's
@@ -34,6 +37,8 @@ export interface Task {
   payload: AnnotationPayload
   /** Deterministic AI patch prompt context derived from the payload. */
   promptContext: PatchPromptContext
+  /** Present once repository source snippets have been collected for this task. */
+  sourceContext?: RepoSourceContext
   /** Present once a mock patch has been proposed for this task. */
   patchProposal?: PatchProposal
 }
@@ -46,6 +51,9 @@ export interface TaskSummary {
   projectId: string
   route: string
   annotationCount: number
+  sourceContextStatus: SourceContextStatus
+  sourceFileCount: number
+  sourceIssueCount: number
   /** Present once a patch proposal exists. */
   patchProposalId?: string
 }
@@ -62,6 +70,8 @@ export interface TaskStore {
 }
 
 function toSummary(task: Task): TaskSummary {
+  const sourceFileCount = task.sourceContext?.files.length ?? 0
+  const sourceIssueCount = task.sourceContext?.issues.length ?? 0
   const summary: TaskSummary = {
     id: task.id,
     status: task.status,
@@ -69,6 +79,13 @@ function toSummary(task: Task): TaskSummary {
     projectId: task.payload.project.projectId,
     route: task.payload.page.route,
     annotationCount: task.payload.annotations.length,
+    sourceContextStatus: task.sourceContext
+      ? sourceIssueCount > 0
+        ? "issues"
+        : "collected"
+      : "not_collected",
+    sourceFileCount,
+    sourceIssueCount,
   }
   if (task.patchProposal) summary.patchProposalId = task.patchProposal.id
   return summary

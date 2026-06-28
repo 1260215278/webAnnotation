@@ -1,7 +1,8 @@
 /**
  * Minimal browser task console for the platform starter. Served as a single static
  * HTML document with vanilla JS — no front-end framework, no build step. It talks to
- * the existing JSON API (`/api/tasks`, `/api/tasks/:id`, `/api/tasks/:id/mock-patch`).
+ * the existing JSON API (`/api/tasks`, `/api/tasks/:id`, `/api/tasks/:id/mock-patch`,
+ * `/api/tasks/:id/source-context`).
  *
  * The client script below intentionally avoids template literals and `${...}` so it
  * can live inside this module's outer template literal without interpolation. All
@@ -28,7 +29,17 @@ export const CONSOLE_MESSAGES = {
     targetField: "Target",
     selectorField: "Selector",
     sourceField: "Source",
-    patchProposalHeading: "补丁建议",
+    sourceContextLabel: "source context",
+    sourceContextHeading: "Source context",
+    sourceContextNotCollected: "Source context has not been collected for this task.",
+    collectSourceContext: "Collect source context",
+    sourceContextFilesField: "Files",
+    sourceContextIssuesField: "Issues",
+    lineRangeField: "Lines",
+    noSourceContextIssues: "No source context issues.",
+    sourceContextFailed: "Source context failed",
+    sourceContextRequestFailed: "Source context request failed",
+    patchProposalHeading: "Patch proposal",
     summaryField: "Summary",
     suggestedFilesField: "Suggested files",
     generateMockPatch: "Generate mock patch",
@@ -57,7 +68,17 @@ export const CONSOLE_MESSAGES = {
     targetField: "目标",
     selectorField: "选择器",
     sourceField: "源码",
-    patchProposalHeading: "Patch Proposal",
+    sourceContextLabel: "源码上下文",
+    sourceContextHeading: "源码上下文",
+    sourceContextNotCollected: "当前任务尚未收集源码上下文。",
+    collectSourceContext: "收集源码上下文",
+    sourceContextFilesField: "文件",
+    sourceContextIssuesField: "问题",
+    lineRangeField: "行号",
+    noSourceContextIssues: "没有源码上下文问题。",
+    sourceContextFailed: "源码上下文收集失败",
+    sourceContextRequestFailed: "源码上下文请求失败",
+    patchProposalHeading: "补丁建议",
     summaryField: "摘要",
     suggestedFilesField: "建议文件",
     generateMockPatch: "生成 mock patch",
@@ -96,7 +117,11 @@ export function renderConsoleHtml(): string {
     button.primary { background: #2563eb22; border-color: #2563eb88; }
     .annotation { border: 1px solid #8883; border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
     p { margin: 0.25rem 0; }
-    pre.diff { background: #8881; border-radius: 6px; padding: 0.75rem; overflow: auto; font-size: 0.8rem; }
+    pre.diff, pre.source { background: #8881; border-radius: 6px; padding: 0.75rem; overflow: auto; font-size: 0.8rem; }
+    .source-file { border: 1px solid #8883; border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+    .source-file h5 { margin: 0 0 0.35rem; font-size: 0.9rem; }
+    .issue-list { list-style: disc; padding-left: 1.25rem; margin: 0.25rem 0 0.75rem; }
+    .issue-list li { border: 0; padding: 0.15rem 0; font-size: 0.85rem; }
     .error { color: #b91c1c; padding: 0.5rem 1rem; margin: 0; background: #b91c1c1a; }
     #task-detail { font-size: 0.9rem; }
   </style>
@@ -219,6 +244,10 @@ export function renderConsoleHtml(): string {
         li.appendChild(btn);
         var meta = task.projectId + ' · ' + task.route + ' · ' + t('annotationsLabel') + ': ' + task.annotationCount;
         if (task.patchProposalId) meta += ' · ' + t('proposalIdLabel') + ': ' + task.patchProposalId;
+        if (task.sourceContextStatus) {
+          meta += ' · ' + t('sourceContextLabel') + ': ' + task.sourceContextStatus;
+          meta += ' (' + (task.sourceFileCount || 0) + '/' + (task.sourceIssueCount || 0) + ')';
+        }
         li.appendChild(el('div', meta));
         listEl.appendChild(li);
       });
@@ -232,6 +261,37 @@ export function renderConsoleHtml(): string {
       }).then(function (data) {
         renderDetail(data.task);
       }).catch(function () { showError(t('loadTaskError') + ' ' + id); });
+    }
+
+    function renderSourceContext(sourceContext) {
+      detailEl.appendChild(field(t('sourceContextFilesField'), (sourceContext.files || []).length));
+      (sourceContext.files || []).forEach(function (file) {
+        var box = el('div');
+        box.className = 'source-file';
+        box.appendChild(el('h5', file.file));
+        box.appendChild(field(t('lineRangeField'), file.startLine + '-' + file.endLine));
+        var pre = el('pre', file.content || '');
+        pre.className = 'source';
+        box.appendChild(pre);
+        detailEl.appendChild(box);
+      });
+
+      var issues = sourceContext.issues || [];
+      detailEl.appendChild(field(t('sourceContextIssuesField'), issues.length));
+      if (issues.length === 0) {
+        detailEl.appendChild(el('p', t('noSourceContextIssues')));
+        return;
+      }
+      var list = el('ul');
+      list.className = 'issue-list';
+      issues.forEach(function (issue) {
+        var text = issue.code;
+        if (issue.file) text += ' · ' + issue.file;
+        if (issue.annotationId) text += ' · ' + issue.annotationId;
+        if (issue.message) text += ' — ' + issue.message;
+        list.appendChild(el('li', text));
+      });
+      detailEl.appendChild(list);
     }
 
     function renderDetail(task) {
@@ -261,6 +321,17 @@ export function renderConsoleHtml(): string {
         detailEl.appendChild(box);
       });
 
+      detailEl.appendChild(el('h4', t('sourceContextHeading')));
+      if (task.sourceContext) {
+        renderSourceContext(task.sourceContext);
+      } else {
+        detailEl.appendChild(el('p', t('sourceContextNotCollected')));
+        var collect = el('button', t('collectSourceContext'));
+        collect.className = 'primary';
+        collect.addEventListener('click', function () { collectSourceContext(task.id); });
+        detailEl.appendChild(collect);
+      }
+
       detailEl.appendChild(el('h4', t('patchProposalHeading')));
       if (task.patchProposal) {
         var p = task.patchProposal;
@@ -286,6 +357,17 @@ export function renderConsoleHtml(): string {
         selectTask(id);
         loadTasks();
       }).catch(function () { showError(t('mockPatchRequestFailed')); });
+    }
+
+    function collectSourceContext(id) {
+      clearError();
+      fetch('/api/tasks/' + encodeURIComponent(id) + '/source-context', { method: 'POST' }).then(function (r) {
+        return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+      }).then(function (res) {
+        if (!res.ok) { showError(t('sourceContextFailed') + ': ' + (res.body && res.body.error)); return; }
+        selectTask(id);
+        loadTasks();
+      }).catch(function () { showError(t('sourceContextRequestFailed')); });
     }
 
     languageSelect.addEventListener('change', function () { setLanguage(languageSelect.value); });

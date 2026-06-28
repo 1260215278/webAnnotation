@@ -15,3 +15,4 @@ Short public milestones for the project. This file intentionally avoids detailed
 - Added the first Vite React source metadata MVP with `source` / `safe` / `disabled` modes.
 - Added a React + Vite example that submits payloads containing `annotations[].target.source`.
 - Added the Node protocol kit MVP: payload and manifest validation, safe-mode source resolution, and deterministic AI patch prompt context.
+- Added the Platform Starter ingest API MVP: a minimal HTTP service that validates payloads, resolves safe-mode sources, and stores tasks in memory.

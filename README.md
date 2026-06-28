@@ -13,6 +13,7 @@ The repository currently includes:
 - `@web-annotation/core`: browser Runtime SDK.
 - `@web-annotation/vite`: Vite plugin for React JSX/TSX source metadata.
 - `@web-annotation/node`: Node-side protocol kit for payload validation and AI patch context.
+- `apps/platform-starter`: a minimal HTTP ingest API that validates payloads and stores tasks.
 - `examples/playground`: a minimal Vite page for local verification.
 - `examples/vite-react`: a React + Vite example showing DOM-to-source payloads.
 - TypeScript typecheck, unit tests, and build scripts.
@@ -45,11 +46,20 @@ The Node protocol kit currently supports:
 - `resolvePayloadSources(payload, manifest)`: enrich safe-mode payloads from a trusted manifest without mutating the input.
 - `buildPatchPromptContext(payload, options?)`: a deterministic, serializable summary for AI patch prompts.
 
+The Platform Starter ingest API currently supports:
+
+- `GET /health`: liveness check.
+- `POST /api/annotations`: validate a payload (optionally `{ payload, manifest }`), resolve safe-mode sources, store a task, and return `{ taskId, status }`.
+- `GET /api/tasks`: list task summaries.
+- `GET /api/tasks/:id`: fetch task detail, including the generated prompt context.
+- In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
+
 Still planned:
 
 - Screenshot capture.
 - Vue SFC source metadata injection.
-- HTTP ingest API and self-hosted AI patch platform.
+- Real AI patch generation and a full task-console UI.
+- Persistent storage for the platform.
 - CLI patch workflow.
 - npm publishing.
 
@@ -212,6 +222,33 @@ const context = buildPatchPromptContext(resolved, { maxDomSnapshotLength: 2000 }
 
 `validateAnnotationPayload` returns `{ ok: true, payload }` or `{ ok: false, issues }` instead of throwing. `validateSourceManifest` validates the manifest emitted by `@web-annotation/vite`. The safe-mode manifest stays on the trusted backend; it is never shipped to the browser.
 
+## Platform Starter (Ingest API)
+
+`apps/platform-starter` is a minimal HTTP ingest service built on Node's built-in `http` and the Node protocol kit. It receives payloads, validates them, resolves safe-mode sources, and stores tasks in memory. It performs no AI calls and uses no database.
+
+Run it locally:
+
+```sh
+pnpm --filter @web-annotation/platform-starter dev
+# defaults to http://localhost:4319 (override with PORT)
+```
+
+Endpoints:
+
+- `GET /health` → `{ ok: true }`.
+- `POST /api/annotations` → body is either a bare `AnnotationPayload v1` or `{ payload, manifest }`. Returns `201 { taskId, status }`, or `400 { error, issues }` on invalid input.
+- `GET /api/tasks` → `{ tasks: TaskSummary[] }`.
+- `GET /api/tasks/:id` → `{ task }`, or `404` when the id is unknown.
+
+The server is exposed as a factory for tests and embedding:
+
+```ts
+import { createPlatformServer } from "@web-annotation/platform-starter"
+
+const { server, store } = createPlatformServer()
+server.listen(4319)
+```
+
 ## Payload Shape
 
 Payload example:
@@ -280,7 +317,7 @@ packages/
   annotation-cli/        Planned local patch pull/apply workflow
 
 apps/
-  platform-starter/      Planned self-hosted annotation and AI patch console
+  platform-starter/      Current minimal HTTP ingest API (validate + store tasks)
 examples/
   playground/            Current local SDK verification page
   vite-react/            Current React source metadata verification page

@@ -537,6 +537,117 @@ describe("POST /api/tasks/:id/patch-review", () => {
   })
 })
 
+describe("GET /api/tasks/:id/patch-artifact", () => {
+  it("returns 404 for an unknown task", async () => {
+    const res = await request("GET", "/api/tasks/task_missing/patch-artifact")
+    expect(res.status).toBe(404)
+    expect((res.body as { error: string }).error).toBe("task not found")
+  })
+
+  it("returns 409 when the task has no patch proposal", async () => {
+    const taskId = await createTask()
+    const res = await request("GET", `/api/tasks/${taskId}/patch-artifact`)
+    expect(res.status).toBe(409)
+    expect((res.body as { error: string }).error).toBe("patch proposal does not exist")
+  })
+
+  it("exports a proposal artifact without applying or writing files", async () => {
+    const taskId = await createTask()
+    const proposal = await request("POST", `/api/tasks/${taskId}/mock-patch`)
+    const res = await request("GET", `/api/tasks/${taskId}/patch-artifact`)
+
+    expect(proposal.status).toBe(201)
+    expect(res.status).toBe(200)
+    const { artifact } = res.body as {
+      artifact: {
+        version: string
+        exportedAt: string
+        taskId: string
+        taskStatus: string
+        project: { projectId: string }
+        page: { route: string }
+        annotations: unknown[]
+        patchProposal: { id: string }
+        safety: {
+          appliesPatch: boolean
+          writesFiles: boolean
+          requiresHumanReview: boolean
+        }
+      }
+    }
+    expect(artifact.version).toBe("web-annotation.patch-artifact.v1")
+    expect(typeof artifact.exportedAt).toBe("string")
+    expect(artifact.taskId).toBe(taskId)
+    expect(artifact.taskStatus).toBe("patch_proposed")
+    expect(artifact.project.projectId).toBe("web-console")
+    expect(artifact.page.route).toBe("/settings")
+    expect(artifact.annotations).toHaveLength(1)
+    expect(artifact.patchProposal.id).toBe(`patch_${taskId.replace(/^task_/, "")}`)
+    expect(artifact.safety).toEqual({
+      appliesPatch: false,
+      writesFiles: false,
+      requiresHumanReview: true,
+    })
+  })
+
+  it("includes patchReview after a human decision", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+    await request("POST", `/api/tasks/${taskId}/patch-review`, {
+      decision: "changes_requested",
+      reviewer: "alice",
+      note: "needs tests",
+    })
+
+    const res = await request("GET", `/api/tasks/${taskId}/patch-artifact`)
+    expect(res.status).toBe(200)
+    const { artifact } = res.body as {
+      artifact: { taskStatus: string; patchReview?: { status: string; reviewer?: string; note?: string } }
+    }
+    expect(artifact.taskStatus).toBe("changes_requested")
+    expect(artifact.patchReview).toMatchObject({
+      status: "changes_requested",
+      reviewer: "alice",
+      note: "needs tests",
+    })
+  })
+
+  it("keeps source context paths repository-relative and avoids leaking repoRoot", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/source-context`, undefined, {
+      repoRoot: viteReactRoot,
+      sourceContext: { contextLines: 1 },
+    })
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+
+    const res = await request("GET", `/api/tasks/${taskId}/patch-artifact`)
+    expect(res.status).toBe(200)
+    const serialized = JSON.stringify(res.body)
+    expect(serialized).not.toContain(viteReactRoot)
+    const { artifact } = res.body as {
+      artifact: { sourceContext?: { files: { file: string }[] } }
+    }
+    expect(artifact.sourceContext?.files[0]?.file).toBe("src/App.tsx")
+  })
+
+  it("regenerates exportedAt on repeat calls while keeping the stored proposal stable", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+
+    const first = await request("GET", `/api/tasks/${taskId}/patch-artifact`)
+    const second = await request("GET", `/api/tasks/${taskId}/patch-artifact`)
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    const firstArtifact = (first.body as { artifact: { patchProposal: unknown; exportedAt: string } })
+      .artifact
+    const secondArtifact = (second.body as { artifact: { patchProposal: unknown; exportedAt: string } })
+      .artifact
+    expect(firstArtifact.patchProposal).toEqual(secondArtifact.patchProposal)
+    expect(typeof firstArtifact.exportedAt).toBe("string")
+    expect(typeof secondArtifact.exportedAt).toBe("string")
+  })
+})
+
 describe("task views expose the proposal", () => {
   it("shows patchProposalId in the summary and the proposal in detail", async () => {
     const taskId = await createTask()

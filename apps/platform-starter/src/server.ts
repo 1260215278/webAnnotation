@@ -22,6 +22,7 @@ import {
   taskStatusForDecision,
 } from "./patchReview"
 import type { PatchReviewInput } from "./patchReview"
+import { buildPatchArtifact } from "./patchArtifact"
 import { renderConsoleHtml } from "./console"
 
 export interface PlatformSourceContextOptions {
@@ -285,6 +286,18 @@ function reviewPatchProposal(
   return { status: 200, body: { taskId: updated.id, status: updated.status, patchReview } }
 }
 
+function exportPatchArtifact(id: string, store: TaskStore, exportedAt: string): PlatformResponse {
+  const task = store.get(id)
+  if (!task) {
+    return { status: 404, body: { error: "task not found", id } }
+  }
+  if (!task.patchProposal) {
+    return { status: 409, body: { error: "patch proposal does not exist", id } }
+  }
+
+  return { status: 200, body: { artifact: buildPatchArtifact(task, exportedAt) } }
+}
+
 export async function handlePlatformRequest(
   input: PlatformRequest,
   store: TaskStore,
@@ -326,6 +339,12 @@ export async function handlePlatformRequest(
   if (method === "POST" && path.startsWith("/api/tasks/") && path.endsWith("/patch")) {
     const id = decodeURIComponent(path.slice("/api/tasks/".length, path.length - "/patch".length))
     return proposeProviderPatch(id, store, options)
+  }
+  if (method === "GET" && path.startsWith("/api/tasks/") && path.endsWith("/patch-artifact")) {
+    const id = decodeURIComponent(
+      path.slice("/api/tasks/".length, path.length - "/patch-artifact".length),
+    )
+    return exportPatchArtifact(id, store, new Date().toISOString())
   }
   if (method === "GET" && path.startsWith("/api/tasks/")) {
     const id = decodeURIComponent(path.slice("/api/tasks/".length))

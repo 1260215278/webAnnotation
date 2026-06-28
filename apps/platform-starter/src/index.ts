@@ -9,6 +9,11 @@ export {
   reviewStatusForDecision,
   taskStatusForDecision,
 } from "./patchReview"
+export {
+  PATCH_ARTIFACT_VERSION,
+  buildPatchArtifact,
+  createPatchArtifactSafety,
+} from "./patchArtifact"
 export { createHttpPatchProvider } from "./httpPatchProvider"
 export { createPlatformServerOptionsFromEnv, readPlatformPortFromEnv } from "./env"
 export { renderConsoleHtml } from "./console"
@@ -35,5 +40,6 @@ export type {
 } from "./store"
 export type { PatchProvider, PatchProviderInput, PatchProviderResult } from "./patchProvider"
 export type { PatchReviewInput } from "./patchReview"
+export type { PatchArtifact, PatchArtifactSafety } from "./patchArtifact"
 export type { HttpPatchProviderOptions } from "./httpPatchProvider"
 export type { PlatformEnvDependencies } from "./env"

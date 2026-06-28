@@ -51,13 +51,14 @@ The Platform Starter ingest API currently supports:
 
 - `GET /health`: liveness check.
 - `POST /api/annotations`: validate a payload (optionally `{ payload, manifest }`), resolve safe-mode sources, store a task, and return `{ taskId, status }`.
-- `GET /api/tasks`: list task summaries (including `status`, source-context counts, and any `patchProposalId`).
-- `GET /api/tasks/:id`: fetch task detail, including the generated prompt context, any source context, and any patch proposal.
+- `GET /api/tasks`: list task summaries (including `status`, source-context counts, any `patchProposalId`, and any `patchReviewStatus`).
+- `GET /api/tasks/:id`: fetch task detail, including the generated prompt context, any source context, patch proposal, and patch review.
 - `POST /api/tasks/:id/source-context`: collect repository source snippets for a task when the server is configured with a repo root.
 - `POST /api/tasks/:id/patch`: call an injected patch provider to create a patch proposal (idempotent).
 - `POST /api/tasks/:id/mock-patch`: generate a deterministic mock patch proposal, moving the task to `patch_proposed` (idempotent).
 - `POST /api/tasks/:id/patch-review`: record a human `accept` / `reject` / `changes_requested` decision on a proposal (records the decision only; never applies the patch).
-- `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, triggering provider/mock patches, and reviewing proposals.
+- `GET /api/tasks/:id/patch-artifact`: export a `web-annotation.patch-artifact.v1` JSON artifact for downstream CLI/Git/AI apply workflows (export only; never writes files).
+- `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, triggering provider/mock patches, reviewing proposals, and viewing patch artifacts.
 - `createHttpPatchProvider(options)`: a generic HTTP adapter for connecting an external AI/custom patch service.
 - In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
 
@@ -273,7 +274,7 @@ pnpm --filter @web-annotation/platform-starter dev
 
 `PATCH_PROVIDER_TOKEN` is also supported when `WEB_ANNOTATION_PATCH_PROVIDER_TOKEN` is not set.
 
-Then open the task console at `http://localhost:4319/console` (also served at `/`). The console is a single static HTML page (vanilla JS, no framework) with Chinese/English UI switching. It lists tasks, shows a task's payload/prompt-context detail, triggers source-context collection, triggers provider-backed `patch` or deterministic `mock-patch` for tasks without a proposal, and renders source snippets, source issues, proposal `summary`, `suggestedFiles`, and `diffPreview`. Use it for local verification instead of `curl`.
+Then open the task console at `http://localhost:4319/console` (also served at `/`). The console is a single static HTML page (vanilla JS, no framework) with Chinese/English UI switching. It lists tasks, shows a task's payload/prompt-context detail, triggers source-context collection, triggers provider-backed `patch` or deterministic `mock-patch` for tasks without a proposal, renders source snippets, source issues, proposal `summary`, `suggestedFiles`, and `diffPreview`, records review decisions, and displays exported patch artifact JSON. Use it for local verification instead of `curl`.
 
 Endpoints:
 
@@ -286,10 +287,11 @@ Endpoints:
 - `POST /api/tasks/:id/patch` → call `patchProvider.generatePatch({ task, promptContext, sourceContext })`. Returns `201 { taskId, status, patchProposal }` on first success and `200` with the same proposal on repeats; `409 { error }` when no provider is configured; `502 { error, message }` when the provider fails; `404` when the id is unknown.
 - `POST /api/tasks/:id/mock-patch` → generate a mock patch proposal. Returns `201 { taskId, status, patchProposal }` on first call and `200` with the same proposal on repeats (idempotent); `404` when the id is unknown.
 - `POST /api/tasks/:id/patch-review` → body `{ decision: "accept" | "reject" | "changes_requested", reviewer?, note? }`. Records the decision as `patchReview` and moves the task to `patch_accepted` / `patch_rejected` / `changes_requested`. Returns `200 { taskId, status, patchReview }`; `404` when the id is unknown; `409 { error }` when the task has no patch proposal; `400 { error }` for an invalid or missing decision. A repeat review overrides the previous decision (the latest decision wins).
+- `GET /api/tasks/:id/patch-artifact` → export `{ artifact }` with `version: "web-annotation.patch-artifact.v1"`, task metadata, prompt annotations, optional source context, `patchProposal`, optional `patchReview`, and safety flags `{ appliesPatch: false, writesFiles: false, requiresHumanReview: true }`. Returns `404` when the id is unknown and `409 { error }` when the task has no patch proposal. Repeat calls regenerate `exportedAt` while reading the stored proposal/review/task data.
 
 A task summary includes `sourceContextStatus`, `sourceFileCount`, and `sourceIssueCount`. `sourceContext.files[].file` stays repository-relative; absolute paths are not returned. Source-context collection reads files only through the Node kit safety checks and still performs no AI call, diff generation, repository write, or Git operation.
 
-A task moves through `received → patch_proposed → patch_accepted | patch_rejected | changes_requested`. The `patchProposal` carries `summary`, `suggestedFiles`, `diffPreview`, `promptContext`, and optional provider `metadata`. The built-in mock path is deterministic and reads no files; the provider path receives `promptContext` and any collected `sourceContext`, but the starter package itself still does not include model keys, model SDKs, repository writes, or Git operations. A `patchReview` (`status`, `decidedAt`, optional `reviewer`/`note`) records the human decision only — it never applies the patch, writes repository files, or calls a Git provider.
+A task moves through `received → patch_proposed → patch_accepted | patch_rejected | changes_requested`. The `patchProposal` carries `summary`, `suggestedFiles`, `diffPreview`, `promptContext`, and optional provider `metadata`. The built-in mock path is deterministic and reads no files; the provider path receives `promptContext` and any collected `sourceContext`, but the starter package itself still does not include model keys, model SDKs, repository writes, or Git operations. A `patchReview` (`status`, `decidedAt`, optional `reviewer`/`note`) records the human decision only. A patch artifact packages task/proposal/review/source-context data for future apply flows, and its safety flags explicitly state that this starter does not apply patches or write files.
 
 The HTTP provider adapter sends:
 

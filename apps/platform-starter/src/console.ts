@@ -2,7 +2,7 @@
  * Minimal browser task console for the platform starter. Served as a single static
  * HTML document with vanilla JS — no front-end framework, no build step. It talks to
  * the existing JSON API (`/api/tasks`, `/api/tasks/:id`, `/api/tasks/:id/mock-patch`,
- * `/api/tasks/:id/source-context`).
+ * `/api/tasks/:id/source-context`, `/api/tasks/:id/patch-artifact`).
  *
  * The client script below intentionally avoids template literals and `${...}` so it
  * can live inside this module's outer template literal without interpolation. All
@@ -53,6 +53,8 @@ export const CONSOLE_MESSAGES = {
     acceptDecision: "Accept",
     rejectDecision: "Reject",
     requestChangesDecision: "Request changes",
+    patchArtifactHeading: "Patch artifact",
+    viewPatchArtifact: "View patch artifact",
     loadTasksError: "Failed to load tasks",
     loadTaskError: "Failed to load task",
     aiPatchFailed: "AI patch failed",
@@ -61,6 +63,8 @@ export const CONSOLE_MESSAGES = {
     mockPatchRequestFailed: "Mock patch request failed",
     reviewFailed: "Review failed",
     reviewRequestFailed: "Review request failed",
+    patchArtifactFailed: "Patch artifact failed",
+    patchArtifactRequestFailed: "Patch artifact request failed",
   },
   zh: {
     appTitle: "webAnnotation 任务台",
@@ -106,6 +110,8 @@ export const CONSOLE_MESSAGES = {
     acceptDecision: "接受",
     rejectDecision: "拒绝",
     requestChangesDecision: "要求修改",
+    patchArtifactHeading: "补丁产物",
+    viewPatchArtifact: "查看补丁产物",
     loadTasksError: "加载任务失败",
     loadTaskError: "加载任务失败",
     aiPatchFailed: "AI patch 生成失败",
@@ -114,6 +120,8 @@ export const CONSOLE_MESSAGES = {
     mockPatchRequestFailed: "Mock patch 请求失败",
     reviewFailed: "评审提交失败",
     reviewRequestFailed: "评审请求失败",
+    patchArtifactFailed: "补丁产物获取失败",
+    patchArtifactRequestFailed: "补丁产物请求失败",
   },
 } as const
 
@@ -151,6 +159,7 @@ export function renderConsoleHtml(): string {
     .issue-list { list-style: disc; padding-left: 1.25rem; margin: 0.25rem 0 0.75rem; }
     .issue-list li { border: 0; padding: 0.15rem 0; font-size: 0.85rem; }
     .review-actions { margin-top: 0.5rem; }
+    .artifact-actions { margin-top: 0.5rem; }
     .error { color: #b91c1c; padding: 0.5rem 1rem; margin: 0; background: #b91c1c1a; }
     #task-detail { font-size: 0.9rem; }
   </style>
@@ -371,6 +380,13 @@ export function renderConsoleHtml(): string {
         pre.className = 'diff';
         detailEl.appendChild(pre);
 
+        var artifactActions = el('div');
+        artifactActions.className = 'artifact-actions';
+        var artifactBtn = el('button', t('viewPatchArtifact'));
+        artifactBtn.addEventListener('click', function () { viewPatchArtifact(task.id); });
+        artifactActions.appendChild(artifactBtn);
+        detailEl.appendChild(artifactActions);
+
         detailEl.appendChild(el('h4', t('patchReviewHeading')));
         if (task.patchReview) {
           detailEl.appendChild(field(t('reviewStatusField'), task.patchReview.status));
@@ -455,6 +471,28 @@ export function renderConsoleHtml(): string {
         selectTask(id);
         loadTasks();
       }).catch(function () { showError(t('reviewRequestFailed')); });
+    }
+
+    function renderPatchArtifact(artifact) {
+      var existing = document.getElementById('patch-artifact-preview');
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      var box = el('div');
+      box.id = 'patch-artifact-preview';
+      box.appendChild(el('h4', t('patchArtifactHeading')));
+      var pre = el('pre', JSON.stringify(artifact, null, 2));
+      pre.className = 'source';
+      box.appendChild(pre);
+      detailEl.appendChild(box);
+    }
+
+    function viewPatchArtifact(id) {
+      clearError();
+      fetch('/api/tasks/' + encodeURIComponent(id) + '/patch-artifact').then(function (r) {
+        return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+      }).then(function (res) {
+        if (!res.ok) { showError(t('patchArtifactFailed') + ': ' + (res.body && res.body.error)); return; }
+        renderPatchArtifact(res.body && res.body.artifact);
+      }).catch(function () { showError(t('patchArtifactRequestFailed')); });
     }
 
     languageSelect.addEventListener('change', function () { setLanguage(languageSelect.value); });

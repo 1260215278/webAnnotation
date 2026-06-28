@@ -12,3 +12,5 @@ Short public milestones for the project. This file intentionally avoids detailed
 - Added the first Runtime SDK MVP with DOM selection, floating annotation input, payload creation, and submission hooks.
 - Added a minimal Vite playground for local end-to-end validation.
 - Added typecheck, test, and build verification for the monorepo.
+- Added the first Vite React source metadata MVP with `source` / `safe` / `disabled` modes.
+- Added a React + Vite example that submits payloads containing `annotations[].target.source`.

@@ -13,6 +13,7 @@ export type AnnotationMode = "single" | "batch"
 
 /** Source-mapping mode. Produced by the (planned) build plugin, not the SDK. */
 export type SourceMode = "source" | "safe" | "disabled"
+export type RuntimeSourceMode = Exclude<SourceMode, "disabled">
 
 export interface Viewport {
   width: number
@@ -41,11 +42,11 @@ export interface PageInfo {
 }
 
 /**
- * Source metadata for an annotated element. Populated only when a build plugin
- * has injected source attributes into the DOM. Not yet produced in this MVP.
+ * Source metadata for an annotated element. Populated when a build plugin has
+ * injected source attributes into the DOM and runtime capture has not disabled it.
  */
 export interface SourceMetadata {
-  mode: SourceMode
+  mode: RuntimeSourceMode
   framework?: string
   file?: string
   line?: number
@@ -89,13 +90,13 @@ export interface AnnotationPayload {
   annotations: AnnotationItem[]
 }
 
-/** Capture toggles. `screenshot` and `sourceMetadata` are planned, not yet implemented. */
+/** Capture toggles. */
 export interface CaptureOptions {
   /** Include a sanitized DOM snapshot of the target element. Default: true. */
   domSnapshot?: boolean
   /** Planned: include a screenshot reference. Not implemented in this MVP. */
   screenshot?: boolean
-  /** Planned: how to resolve source metadata. Not implemented in this MVP. */
+  /** Read source metadata from injected DOM attributes. Default: "auto". */
   sourceMetadata?: "auto" | "disabled"
 }
 

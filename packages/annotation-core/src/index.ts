@@ -13,6 +13,7 @@ export {
   ANNOTATION_UI_ATTR,
 } from "./selector"
 export { createId } from "./id"
+export { readSourceMetadata, SOURCE_ATTR } from "./source"
 
 export type {
   Annotator,

@@ -7,6 +7,7 @@ import type {
 import { ANNOTATION_UI_ATTR, buildSelector, buildCssPath } from "./selector"
 import { createId } from "./id"
 import { sanitizeDomSnapshot } from "./snapshot"
+import { readSourceMetadata } from "./source"
 import { buildAnnotationItem, buildAnnotationPayload, buildPageInfo } from "./payload"
 import { submitPayload } from "./submit"
 import { createHighlighter, type Highlighter } from "./highlight"
@@ -145,9 +146,15 @@ class BrowserAnnotator implements Annotator {
       text: (el.textContent ?? "").trim().slice(0, MAX_TEXT_LENGTH),
       rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
     }
-    // DOM snapshot defaults on; source metadata is produced by the (planned) build plugin.
+    // DOM snapshot defaults on.
     if (this.options.capture?.domSnapshot !== false) {
       target.domSnapshot = sanitizeDomSnapshot(el)
+    }
+    if (this.options.capture?.sourceMetadata !== "disabled") {
+      const source = readSourceMetadata(el)
+      if (source) {
+        target.source = source
+      }
     }
     return target
   }

@@ -4,14 +4,16 @@ AI-first web annotation toolkit for turning page feedback into structured code-c
 
 `webAnnotation` lets a host web app enter annotation mode, select a DOM element, write a note, and submit an `AnnotationPayload v1` to a configured backend. The long-term goal is to connect those payloads to AI patch generation, PR/MR review, and local CLI patch workflows.
 
-> Status: first MVP in development. The runtime SDK and playground exist locally; npm packages are not published yet.
+> Status: early MVP in development. The runtime SDK, React source metadata Vite plugin, and local examples exist in this repository; npm packages are not published yet.
 
 ## Current MVP
 
 The repository currently includes:
 
 - `@web-annotation/core`: browser Runtime SDK.
+- `@web-annotation/vite`: Vite plugin for React JSX/TSX source metadata.
 - `examples/playground`: a minimal Vite page for local verification.
+- `examples/vite-react`: a React + Vite example showing DOM-to-source payloads.
 - TypeScript typecheck, unit tests, and build scripts.
 
 The SDK currently supports:
@@ -24,11 +26,21 @@ The SDK currently supports:
 - `submitAnnotation(payload)` custom submission.
 - `endpoint` + optional `getAuthToken()` POST submission.
 - `AnnotationPayload v1` with project, page, target selector, CSS path, element text, rect, and sanitized DOM snapshot.
+- Optional `target.source` when source metadata has been injected by the Vite plugin.
+
+The Vite plugin currently supports:
+
+- React JSX/TSX intrinsic HTML element metadata injection.
+- `mode: "source"` for file, line, column, component, framework, and sourceId.
+- `mode: "safe"` for browser payloads that include only anonymous sourceId.
+- `mode: "disabled"` to skip source metadata injection.
+- `include` / `exclude` filters.
+- An in-memory manifest callback for mapping sourceId back to source locations on the backend side.
 
 Still planned:
 
 - Screenshot capture.
-- React/Vue source metadata injection.
+- Vue SFC source metadata injection.
 - Node helper package.
 - CLI patch workflow.
 - Self-hosted AI patch platform.
@@ -55,6 +67,14 @@ pnpm example
 ```
 
 Then open the printed local URL, enable annotation mode, select an element, type a note, and press `Enter`. The submitted payload appears in the page and in the console.
+
+Run the React source metadata example:
+
+```sh
+pnpm example:react
+```
+
+The React example uses the Vite plugin and shows submitted payloads with `annotations[].target.source`.
 
 ## Runtime SDK Usage
 
@@ -123,11 +143,48 @@ interface AnnotatorOptions {
 
 `submitAnnotation` takes precedence over `endpoint`. If neither is provided, submitting an annotation throws a configuration error.
 
-`capture.screenshot` and `capture.sourceMetadata` are reserved for planned packages and are not produced by the current Runtime SDK.
+`capture.screenshot` is reserved for a planned package. `capture.sourceMetadata` defaults to `"auto"` and reads metadata only when a build plugin has injected it into the DOM.
+
+## Vite Plugin Usage
+
+Use the Vite plugin when you want annotations to carry enough context for an AI or backend service to find the source component.
+
+```ts
+import { defineConfig } from "vite"
+import react from "@vitejs/plugin-react"
+import { annotationPlugin } from "@web-annotation/vite"
+
+export default defineConfig({
+  plugins: [
+    annotationPlugin({
+      mode: "source"
+    }),
+    react()
+  ]
+})
+```
+
+Production-oriented safe mode keeps real file paths and line numbers out of the browser payload:
+
+```ts
+annotationPlugin({
+  mode: "safe",
+  onManifest: (manifest) => {
+    // Store this on your backend or emit it into your own build artifact.
+    console.log(manifest)
+  }
+})
+```
+
+Mode behavior:
+
+- `source`: browser DOM and payload include `sourceId`, `file`, `line`, `column`, `component`, and `framework`.
+- `safe`: browser DOM and payload include only `sourceId`; the manifest keeps the full mapping for trusted code.
+- `disabled`: no source attributes are injected; the Runtime SDK still works with selector and DOM snapshot context.
 
 ## Payload Shape
 
-Current payload example:
+Payload example:
 
 ```json
 {
@@ -165,21 +222,30 @@ Current payload example:
           "width": 74,
           "height": 34
         },
-        "domSnapshot": "<button id=\"save\" data-annotation-id=\"el_...\">Submit</button>"
+        "domSnapshot": "<button id=\"save\" data-annotation-id=\"el_...\">Submit</button>",
+        "source": {
+          "mode": "source",
+          "sourceId": "s_19cu8m6",
+          "file": "src/App.tsx",
+          "line": 25,
+          "column": 9,
+          "component": "App",
+          "framework": "react"
+        }
       }
     }
   ]
 }
 ```
 
-Future source metadata will be attached under `annotations[].target.source` when a build plugin provides it.
+`source` is omitted when no build plugin is present, when the plugin is disabled, or when runtime capture sets `sourceMetadata: "disabled"`.
 
 ## Planned Ecosystem
 
 ```text
 packages/
   annotation-core/       Runtime SDK for browser annotation
-  annotation-vite/       Planned Vite plugin for React/Vue source metadata
+  annotation-vite/       Current Vite plugin for React source metadata
   annotation-node/       Planned backend helpers and payload validation
   annotation-cli/        Planned local patch pull/apply workflow
 
@@ -187,6 +253,7 @@ apps/
   platform-starter/      Planned self-hosted annotation and AI patch console
 examples/
   playground/            Current local SDK verification page
+  vite-react/            Current React source metadata verification page
 ```
 
 ## AI Patch Direction

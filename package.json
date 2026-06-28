@@ -12,7 +12,9 @@
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
-    "example": "pnpm --filter @web-annotation/example-playground run dev"
+    "example": "pnpm --filter @web-annotation/example-playground run dev",
+    "example:playground": "pnpm --filter @web-annotation/example-playground run dev",
+    "example:react": "pnpm --filter @web-annotation/example-vite-react run dev"
   },
   "devDependencies": {
     "typescript": "^5.6.3"

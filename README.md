@@ -4,7 +4,7 @@ AI-first web annotation toolkit for turning page feedback into structured code-c
 
 `webAnnotation` lets a host web app enter annotation mode, select a DOM element, write a note, and submit an `AnnotationPayload v1` to a configured backend. The long-term goal is to connect those payloads to AI patch generation, PR/MR review, and local CLI patch workflows.
 
-> Status: early MVP in development. The runtime SDK, React source metadata Vite plugin, and local examples exist in this repository; npm packages are not published yet.
+> Status: early MVP in development. The runtime SDK, React source metadata Vite plugin, Node protocol kit, and local examples exist in this repository; npm packages are not published yet.
 
 ## Current MVP
 
@@ -12,6 +12,7 @@ The repository currently includes:
 
 - `@web-annotation/core`: browser Runtime SDK.
 - `@web-annotation/vite`: Vite plugin for React JSX/TSX source metadata.
+- `@web-annotation/node`: Node-side protocol kit for payload validation and AI patch context.
 - `examples/playground`: a minimal Vite page for local verification.
 - `examples/vite-react`: a React + Vite example showing DOM-to-source payloads.
 - TypeScript typecheck, unit tests, and build scripts.
@@ -37,13 +38,19 @@ The Vite plugin currently supports:
 - `include` / `exclude` filters.
 - An in-memory manifest callback for mapping sourceId back to source locations on the backend side.
 
+The Node protocol kit currently supports:
+
+- `validateAnnotationPayload(input)` / `assertAnnotationPayload(input)`: runtime validation of `AnnotationPayload v1` with readable issues.
+- `validateSourceManifest(input)`: runtime validation of a sourceId-to-location manifest.
+- `resolvePayloadSources(payload, manifest)`: enrich safe-mode payloads from a trusted manifest without mutating the input.
+- `buildPatchPromptContext(payload, options?)`: a deterministic, serializable summary for AI patch prompts.
+
 Still planned:
 
 - Screenshot capture.
 - Vue SFC source metadata injection.
-- Node helper package.
+- HTTP ingest API and self-hosted AI patch platform.
 - CLI patch workflow.
-- Self-hosted AI patch platform.
 - npm publishing.
 
 ## Install Locally
@@ -182,6 +189,29 @@ Mode behavior:
 - `safe`: browser DOM and payload include only `sourceId`; the manifest keeps the full mapping for trusted code.
 - `disabled`: no source attributes are injected; the Runtime SDK still works with selector and DOM snapshot context.
 
+## Node Protocol Kit Usage
+
+Use the Node kit on your backend or AI layer to validate incoming payloads, resolve safe-mode sources against a trusted manifest, and build deterministic prompt context. It never calls AI APIs, reads model keys, or touches a Git provider.
+
+```ts
+import {
+  assertAnnotationPayload,
+  resolvePayloadSources,
+  buildPatchPromptContext,
+} from "@web-annotation/node"
+
+// 1. Validate the payload received from the browser (throws on invalid input).
+const payload = assertAnnotationPayload(requestBody)
+
+// 2. In safe mode the browser only sent `sourceId`; resolve it with your manifest.
+const resolved = resolvePayloadSources(payload, sourceManifest)
+
+// 3. Build a stable, serializable context for an AI patch prompt.
+const context = buildPatchPromptContext(resolved, { maxDomSnapshotLength: 2000 })
+```
+
+`validateAnnotationPayload` returns `{ ok: true, payload }` or `{ ok: false, issues }` instead of throwing. `validateSourceManifest` validates the manifest emitted by `@web-annotation/vite`. The safe-mode manifest stays on the trusted backend; it is never shipped to the browser.
+
 ## Payload Shape
 
 Payload example:
@@ -246,7 +276,7 @@ Payload example:
 packages/
   annotation-core/       Runtime SDK for browser annotation
   annotation-vite/       Current Vite plugin for React source metadata
-  annotation-node/       Planned backend helpers and payload validation
+  annotation-node/       Current Node protocol kit: validation, source resolution, prompt context
   annotation-cli/        Planned local patch pull/apply workflow
 
 apps/

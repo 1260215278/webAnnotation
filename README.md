@@ -13,7 +13,7 @@ The repository currently includes:
 - `@web-annotation/core`: browser Runtime SDK.
 - `@web-annotation/vite`: Vite plugin for React JSX/TSX source metadata.
 - `@web-annotation/node`: Node-side protocol kit for payload validation and AI patch context.
-- `apps/platform-starter`: a minimal HTTP ingest API that validates payloads, stores tasks, and proposes mock patches.
+- `apps/platform-starter`: a minimal HTTP ingest API (plus a bilingual static task console) that validates payloads, stores tasks, and proposes mock patches.
 - `examples/playground`: a minimal Vite page for local verification.
 - `examples/vite-react`: a React + Vite example showing DOM-to-source payloads.
 - TypeScript typecheck, unit tests, and build scripts.
@@ -53,6 +53,7 @@ The Platform Starter ingest API currently supports:
 - `GET /api/tasks`: list task summaries (including `status` and any `patchProposalId`).
 - `GET /api/tasks/:id`: fetch task detail, including the generated prompt context and any patch proposal.
 - `POST /api/tasks/:id/mock-patch`: generate a deterministic mock patch proposal, moving the task to `patch_proposed` (idempotent).
+- `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, and triggering mock patches.
 - In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
 
 Still planned:
@@ -234,8 +235,11 @@ pnpm --filter @web-annotation/platform-starter dev
 # defaults to http://localhost:4319 (override with PORT)
 ```
 
+Then open the task console at `http://localhost:4319/console` (also served at `/`). The console is a single static HTML page (vanilla JS, no framework) with Chinese/English UI switching. It lists tasks, shows a task's payload/prompt-context detail, triggers `mock-patch` for tasks without a proposal, and renders the proposal `summary`, `suggestedFiles`, and `diffPreview`. Use it for local verification instead of `curl`.
+
 Endpoints:
 
+- `GET /` or `GET /console` → the task console HTML page.
 - `GET /health` → `{ ok: true }`.
 - `POST /api/annotations` → body is either a bare `AnnotationPayload v1` or `{ payload, manifest }`. Returns `201 { taskId, status }`, or `400 { error, issues }` on invalid input.
 - `GET /api/tasks` → `{ tasks: TaskSummary[] }`.
@@ -321,7 +325,7 @@ packages/
   annotation-cli/        Planned local patch pull/apply workflow
 
 apps/
-  platform-starter/      Current minimal HTTP ingest API (validate + store tasks + mock patch)
+  platform-starter/      Current minimal HTTP ingest API + bilingual static task console
 examples/
   playground/            Current local SDK verification page
   vite-react/            Current React source metadata verification page

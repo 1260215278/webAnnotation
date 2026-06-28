@@ -17,3 +17,4 @@ Short public milestones for the project. This file intentionally avoids detailed
 - Added the Node protocol kit MVP: payload and manifest validation, safe-mode source resolution, and deterministic AI patch prompt context.
 - Added the Platform Starter ingest API MVP: a minimal HTTP service that validates payloads, resolves safe-mode sources, and stores tasks in memory.
 - Added the Platform Starter mock patch proposal MVP: tasks flow from `received` to `patch_proposed` via a deterministic, idempotent `POST /api/tasks/:id/mock-patch`.
+- Added a minimal bilingual static-HTML task console (served at `/` and `/console`) for browsing tasks, viewing details, and triggering mock patches without curl.

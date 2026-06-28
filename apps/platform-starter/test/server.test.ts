@@ -21,6 +21,18 @@ describe("GET /health", () => {
   })
 })
 
+describe("task console", () => {
+  it("serves HTML at / and /console", async () => {
+    for (const path of ["/", "/console"]) {
+      const res = await request("GET", path)
+      expect(res.status).toBe(200)
+      expect(res.contentType).toBe("text/html; charset=utf-8")
+      expect(typeof res.body).toBe("string")
+      expect(res.body as string).toContain('id="console-root"')
+    }
+  })
+})
+
 describe("POST /api/annotations", () => {
   it("accepts a valid payload and returns 201 with a taskId", async () => {
     const res = await request("POST", "/api/annotations", makeSourcePayload())

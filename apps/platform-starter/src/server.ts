@@ -11,6 +11,7 @@ import {
 import { createTaskStore } from "./store"
 import type { Task, TaskStore } from "./store"
 import { buildMockPatchProposal } from "./mockPatch"
+import { renderConsoleHtml } from "./console"
 
 export interface PlatformServerOptions {
   /** Inject a custom store (e.g. for tests or a future persistent backend). */
@@ -33,6 +34,8 @@ export interface PlatformRequest {
 export interface PlatformResponse {
   status: number
   body: unknown
+  /** Response content type. Defaults to JSON; set to text/html for the console page. */
+  contentType?: string
 }
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024
@@ -165,6 +168,9 @@ export async function handlePlatformRequest(
   const method = input.method ?? "GET"
   const path = input.path
 
+  if (method === "GET" && (path === "/" || path === "/console")) {
+    return { status: 200, contentType: "text/html; charset=utf-8", body: renderConsoleHtml() }
+  }
   if (method === "GET" && path === "/health") {
     return { status: 200, body: { ok: true } }
   }
@@ -215,7 +221,13 @@ async function handleHttpRequest(
   }
 
   const response = await handlePlatformRequest({ method, path, body }, store)
-  sendJson(res, response.status, response.body)
+  const contentType = response.contentType ?? "application/json; charset=utf-8"
+  res.writeHead(response.status, { "content-type": contentType })
+  res.end(
+    contentType.startsWith("application/json")
+      ? JSON.stringify(response.body)
+      : String(response.body),
+  )
 }
 
 /**

@@ -57,13 +57,14 @@ The Platform Starter ingest API currently supports:
 - `POST /api/tasks/:id/patch`: call an injected patch provider to create a patch proposal (idempotent).
 - `POST /api/tasks/:id/mock-patch`: generate a deterministic mock patch proposal, moving the task to `patch_proposed` (idempotent).
 - `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, and triggering provider/mock patches.
+- `createHttpPatchProvider(options)`: a generic HTTP adapter for connecting an external AI/custom patch service.
 - In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
 
 Still planned:
 
 - Screenshot capture.
 - Vue SFC source metadata injection.
-- Built-in model provider adapters and a production-grade task-console workflow.
+- Model-specific provider adapters and a production-grade task-console workflow.
 - Persistent storage for the platform.
 - CLI patch workflow.
 - npm publishing.
@@ -261,6 +262,16 @@ WEB_ANNOTATION_REPO_ROOT=/abs/path/to/your/repo pnpm --filter @web-annotation/pl
 # REPO_ROOT is also supported when WEB_ANNOTATION_REPO_ROOT is not set.
 ```
 
+Enable an external HTTP patch provider:
+
+```sh
+WEB_ANNOTATION_PATCH_PROVIDER_URL=https://your-ai-backend.example.com/web-annotation/patch \
+WEB_ANNOTATION_PATCH_PROVIDER_TOKEN=server-side-provider-token \
+pnpm --filter @web-annotation/platform-starter dev
+```
+
+`PATCH_PROVIDER_TOKEN` is also supported when `WEB_ANNOTATION_PATCH_PROVIDER_TOKEN` is not set.
+
 Then open the task console at `http://localhost:4319/console` (also served at `/`). The console is a single static HTML page (vanilla JS, no framework) with Chinese/English UI switching. It lists tasks, shows a task's payload/prompt-context detail, triggers source-context collection, triggers provider-backed `patch` or deterministic `mock-patch` for tasks without a proposal, and renders source snippets, source issues, proposal `summary`, `suggestedFiles`, and `diffPreview`. Use it for local verification instead of `curl`.
 
 Endpoints:
@@ -278,23 +289,43 @@ A task summary includes `sourceContextStatus`, `sourceFileCount`, and `sourceIss
 
 A task moves through `received → patch_proposed`. The `patchProposal` carries `summary`, `suggestedFiles`, `diffPreview`, `promptContext`, and optional provider `metadata`. The built-in mock path is deterministic and reads no files; the provider path receives `promptContext` and any collected `sourceContext`, but the starter package itself still does not include model keys, model SDKs, repository writes, or Git operations.
 
+The HTTP provider adapter sends:
+
+```json
+{
+  "taskId": "task_...",
+  "task": {},
+  "promptContext": {},
+  "sourceContext": {}
+}
+```
+
+The external provider should return:
+
+```json
+{
+  "summary": "Short proposal summary",
+  "suggestedFiles": ["src/App.tsx"],
+  "diffPreview": "--- a/src/App.tsx\n+++ b/src/App.tsx\n...",
+  "metadata": {
+    "provider": "your-provider"
+  }
+}
+```
+
+`WEB_ANNOTATION_PATCH_PROVIDER_TOKEN` is sent only from the Platform Starter server to your provider as `Authorization: Bearer ...`; it is not exposed by the browser Runtime SDK.
+
 The server is exposed as a factory for tests and embedding:
 
 ```ts
-import { createPlatformServer } from "@web-annotation/platform-starter"
+import { createHttpPatchProvider, createPlatformServer } from "@web-annotation/platform-starter"
 
 const { server, store } = createPlatformServer({
   repoRoot: "/abs/path/to/your/repo",
-  patchProvider: {
-    async generatePatch({ promptContext, sourceContext }) {
-      return {
-        summary: `Patch for ${promptContext.annotations.length} annotation(s).`,
-        suggestedFiles: sourceContext?.files.map((file) => file.file) ?? [],
-        diffPreview: "Provider-generated diff preview goes here.",
-        metadata: { provider: "your-provider" }
-      }
-    }
-  }
+  patchProvider: createHttpPatchProvider({
+    endpoint: "https://your-ai-backend.example.com/web-annotation/patch",
+    getAuthToken: async () => "server-side-provider-token"
+  })
 })
 server.listen(4319)
 ```

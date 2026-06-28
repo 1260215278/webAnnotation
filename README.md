@@ -45,6 +45,7 @@ The Node protocol kit currently supports:
 - `validateSourceManifest(input)`: runtime validation of a sourceId-to-location manifest.
 - `resolvePayloadSources(payload, manifest)`: enrich safe-mode payloads from a trusted manifest without mutating the input.
 - `buildPatchPromptContext(payload, options?)`: a deterministic, serializable summary for AI patch prompts.
+- `collectRepoSourceContext(promptContext, options)`: safely read repo source snippets referenced by `source.file`/`line`, with path-traversal/oversize/binary protection and readable issues.
 
 The Platform Starter ingest API currently supports:
 
@@ -223,6 +224,22 @@ const context = buildPatchPromptContext(resolved, { maxDomSnapshotLength: 2000 }
 ```
 
 `validateAnnotationPayload` returns `{ ok: true, payload }` or `{ ok: false, issues }` instead of throwing. `validateSourceManifest` validates the manifest emitted by `@web-annotation/vite`. The safe-mode manifest stays on the trusted backend; it is never shipped to the browser.
+
+When a prompt context carries `source.file`/`line`, `collectRepoSourceContext` reads the relevant source snippets from a local checkout — a building block for a future AI patch step. It calls no AI, generates no diff, and never modifies files:
+
+```ts
+import { collectRepoSourceContext } from "@web-annotation/node"
+
+const { files, issues } = collectRepoSourceContext(context, {
+  rootDir: "/abs/path/to/repo",
+  contextLines: 20,      // lines before/after the annotated line(s)
+  maxFiles: 8,           // cap distinct files read
+  maxBytesPerFile: 65536 // skip oversized files
+})
+// files[i] = { file (relative), startLine, endLine, content, annotations }
+```
+
+Safety is enforced: only relative paths from the context are accepted; absolute paths, empty paths, and `..` traversal that escapes `rootDir` are rejected; the same file is read once; missing, oversized, or binary files (null-byte detection) become `issues` instead of throwing; and the returned `file` is always repository-relative — absolute paths are used only for internal reads, never surfaced to prompt-facing content. For tests, `readFile`/`fileExists` can be injected.
 
 ## Platform Starter (Ingest API)
 

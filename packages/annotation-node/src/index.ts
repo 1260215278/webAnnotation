@@ -6,6 +6,7 @@ export {
 } from "./validate"
 export { resolvePayloadSources } from "./resolve"
 export { buildPatchPromptContext } from "./prompt"
+export { collectRepoSourceContext } from "./repoSource"
 
 export type {
   ValidationIssue,
@@ -19,3 +20,11 @@ export type {
   PatchPromptSource,
   BuildPatchPromptContextOptions,
 } from "./types"
+
+export type {
+  RepoSourceContextOptions,
+  RepoSourceContext,
+  RepoSourceFile,
+  RepoSourceFileAnnotation,
+  RepoSourceIssue,
+} from "./repoSource"

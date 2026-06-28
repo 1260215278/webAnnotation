@@ -105,3 +105,79 @@ describe("GET /api/tasks/:id", () => {
     expect(body.error).toBe("task not found")
   })
 })
+
+async function createTask(body: unknown = makeSourcePayload()): Promise<string> {
+  const res = await request("POST", "/api/annotations", body)
+  return (res.body as { taskId: string }).taskId
+}
+
+describe("POST /api/tasks/:id/mock-patch", () => {
+  it("proposes a mock patch and moves the task to patch_proposed", async () => {
+    const taskId = await createTask()
+    const res = await request("POST", `/api/tasks/${taskId}/mock-patch`)
+    expect(res.status).toBe(201)
+    const body = res.body as {
+      taskId: string
+      status: string
+      patchProposal: { id: string; status: string; suggestedFiles: string[] }
+    }
+    expect(body.status).toBe("patch_proposed")
+    expect(body.patchProposal.status).toBe("proposed")
+    expect(body.patchProposal.suggestedFiles).toContain("src/App.tsx")
+  })
+
+  it("is idempotent: repeating the call returns the same proposal", async () => {
+    const taskId = await createTask()
+    const first = await request("POST", `/api/tasks/${taskId}/mock-patch`)
+    const second = await request("POST", `/api/tasks/${taskId}/mock-patch`)
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(200)
+    const firstProposal = (first.body as { patchProposal: { id: string } }).patchProposal
+    const secondProposal = (second.body as { patchProposal: { id: string } }).patchProposal
+    expect(secondProposal).toEqual(firstProposal)
+  })
+
+  it("returns 404 for an unknown task", async () => {
+    const res = await request("POST", "/api/tasks/task_missing/mock-patch")
+    expect(res.status).toBe(404)
+    expect((res.body as { error: string }).error).toBe("task not found")
+  })
+
+  it("resolves safe-mode source files via the manifest into the proposal", async () => {
+    const taskId = await createTask({ payload: makeSafePayload(), manifest: makeManifest() })
+    const res = await request("POST", `/api/tasks/${taskId}/mock-patch`)
+    expect(res.status).toBe(201)
+    const { patchProposal } = res.body as { patchProposal: { suggestedFiles: string[] } }
+    expect(patchProposal.suggestedFiles).toContain("src/App.tsx")
+  })
+
+  it("generates a fallback proposal for tasks without source metadata", async () => {
+    const payload = makeSourcePayload()
+    delete payload.annotations[0].target.source
+    const taskId = await createTask(payload)
+    const res = await request("POST", `/api/tasks/${taskId}/mock-patch`)
+    expect(res.status).toBe(201)
+    const { patchProposal } = res.body as { patchProposal: { suggestedFiles: string[] } }
+    expect(patchProposal.suggestedFiles).toContain("#save")
+  })
+})
+
+describe("task views expose the proposal", () => {
+  it("shows patchProposalId in the summary and the proposal in detail", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+
+    const list = await request("GET", "/api/tasks")
+    const summary = (list.body as { tasks: { id: string; status: string; patchProposalId?: string }[] })
+      .tasks[0]
+    expect(summary.status).toBe("patch_proposed")
+    expect(summary.patchProposalId).toBe(`patch_${taskId.replace(/^task_/, "")}`)
+
+    const detail = await request("GET", `/api/tasks/${taskId}`)
+    const { task } = detail.body as {
+      task: { status: string; patchProposal?: { id: string; diffPreview: string } }
+    }
+    expect(task.status).toBe("patch_proposed")
+    expect(task.patchProposal?.diffPreview).toContain("web-annotation suggestion")
+  })
+})

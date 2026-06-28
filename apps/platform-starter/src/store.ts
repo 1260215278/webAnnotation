@@ -1,8 +1,30 @@
 import type { AnnotationPayload } from "@web-annotation/core"
 import type { PatchPromptContext } from "@web-annotation/node"
 
-/** Lifecycle status of an ingested annotation task. Only one state in this MVP. */
-export type TaskStatus = "received"
+/** Lifecycle status of an ingested annotation task. */
+export type TaskStatus = "received" | "patch_proposed"
+
+/** Status of a mock patch proposal. Only one state in this MVP. */
+export type PatchProposalStatus = "proposed"
+
+/**
+ * A mock, non-applyable patch suggestion derived deterministically from a task's
+ * prompt context. It stands in for the future AI patch step; no AI is called and no
+ * repository files are read.
+ */
+export interface PatchProposal {
+  id: string
+  status: PatchProposalStatus
+  createdAt: string
+  /** Human-readable one-line description of the proposed change set. */
+  summary: string
+  /** Source files (or selector/cssPath fallbacks) the change would touch. */
+  suggestedFiles: string[]
+  /** Deterministic, readable mock unified diff. Not guaranteed to apply. */
+  diffPreview: string
+  /** The prompt context the proposal was built from. */
+  promptContext: PatchPromptContext
+}
 
 export interface Task {
   id: string
@@ -12,6 +34,8 @@ export interface Task {
   payload: AnnotationPayload
   /** Deterministic AI patch prompt context derived from the payload. */
   promptContext: PatchPromptContext
+  /** Present once a mock patch has been proposed for this task. */
+  patchProposal?: PatchProposal
 }
 
 /** Compact listing shape returned by `GET /api/tasks`. */
@@ -22,6 +46,8 @@ export interface TaskSummary {
   projectId: string
   route: string
   annotationCount: number
+  /** Present once a patch proposal exists. */
+  patchProposalId?: string
 }
 
 /**
@@ -36,7 +62,7 @@ export interface TaskStore {
 }
 
 function toSummary(task: Task): TaskSummary {
-  return {
+  const summary: TaskSummary = {
     id: task.id,
     status: task.status,
     createdAt: task.createdAt,
@@ -44,6 +70,8 @@ function toSummary(task: Task): TaskSummary {
     route: task.payload.page.route,
     annotationCount: task.payload.annotations.length,
   }
+  if (task.patchProposal) summary.patchProposalId = task.patchProposal.id
+  return summary
 }
 
 /** In-memory `TaskStore` preserving insertion order. */

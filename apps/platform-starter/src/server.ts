@@ -10,6 +10,7 @@ import {
 } from "@web-annotation/node"
 import { createTaskStore } from "./store"
 import type { Task, TaskStore } from "./store"
+import { buildMockPatchProposal } from "./mockPatch"
 
 export interface PlatformServerOptions {
   /** Inject a custom store (e.g. for tests or a future persistent backend). */
@@ -135,6 +136,28 @@ function createAnnotationTask(body: unknown, store: TaskStore): PlatformResponse
   return { status: 201, body: { taskId: task.id, status: task.status } }
 }
 
+function proposeMockPatch(id: string, store: TaskStore): PlatformResponse {
+  const task = store.get(id)
+  if (!task) {
+    return { status: 404, body: { error: "task not found", id } }
+  }
+  // Idempotent: an existing proposal is returned as-is, never regenerated.
+  if (task.patchProposal) {
+    return {
+      status: 200,
+      body: { taskId: task.id, status: task.status, patchProposal: task.patchProposal },
+    }
+  }
+
+  const patchProposal = buildMockPatchProposal(task, new Date().toISOString())
+  const updated: Task = { ...task, status: "patch_proposed", patchProposal }
+  store.add(updated)
+  return {
+    status: 201,
+    body: { taskId: updated.id, status: updated.status, patchProposal },
+  }
+}
+
 export async function handlePlatformRequest(
   input: PlatformRequest,
   store: TaskStore,
@@ -150,6 +173,12 @@ export async function handlePlatformRequest(
   }
   if (method === "GET" && path === "/api/tasks") {
     return { status: 200, body: { tasks: store.list() } }
+  }
+  if (method === "POST" && path.startsWith("/api/tasks/") && path.endsWith("/mock-patch")) {
+    const id = decodeURIComponent(
+      path.slice("/api/tasks/".length, path.length - "/mock-patch".length),
+    )
+    return proposeMockPatch(id, store)
   }
   if (method === "GET" && path.startsWith("/api/tasks/")) {
     const id = decodeURIComponent(path.slice("/api/tasks/".length))

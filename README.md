@@ -13,7 +13,7 @@ The repository currently includes:
 - `@web-annotation/core`: browser Runtime SDK.
 - `@web-annotation/vite`: Vite plugin for React JSX/TSX source metadata.
 - `@web-annotation/node`: Node-side protocol kit for payload validation and AI patch context.
-- `apps/platform-starter`: a minimal HTTP ingest API that validates payloads and stores tasks.
+- `apps/platform-starter`: a minimal HTTP ingest API that validates payloads, stores tasks, and proposes mock patches.
 - `examples/playground`: a minimal Vite page for local verification.
 - `examples/vite-react`: a React + Vite example showing DOM-to-source payloads.
 - TypeScript typecheck, unit tests, and build scripts.
@@ -50,15 +50,16 @@ The Platform Starter ingest API currently supports:
 
 - `GET /health`: liveness check.
 - `POST /api/annotations`: validate a payload (optionally `{ payload, manifest }`), resolve safe-mode sources, store a task, and return `{ taskId, status }`.
-- `GET /api/tasks`: list task summaries.
-- `GET /api/tasks/:id`: fetch task detail, including the generated prompt context.
+- `GET /api/tasks`: list task summaries (including `status` and any `patchProposalId`).
+- `GET /api/tasks/:id`: fetch task detail, including the generated prompt context and any patch proposal.
+- `POST /api/tasks/:id/mock-patch`: generate a deterministic mock patch proposal, moving the task to `patch_proposed` (idempotent).
 - In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
 
 Still planned:
 
 - Screenshot capture.
 - Vue SFC source metadata injection.
-- Real AI patch generation and a full task-console UI.
+- Real AI patch generation (replacing the mock) and a full task-console UI.
 - Persistent storage for the platform.
 - CLI patch workflow.
 - npm publishing.
@@ -239,6 +240,9 @@ Endpoints:
 - `POST /api/annotations` → body is either a bare `AnnotationPayload v1` or `{ payload, manifest }`. Returns `201 { taskId, status }`, or `400 { error, issues }` on invalid input.
 - `GET /api/tasks` → `{ tasks: TaskSummary[] }`.
 - `GET /api/tasks/:id` → `{ task }`, or `404` when the id is unknown.
+- `POST /api/tasks/:id/mock-patch` → generate a mock patch proposal. Returns `201 { taskId, status, patchProposal }` on first call and `200` with the same proposal on repeats (idempotent); `404` when the id is unknown.
+
+A task moves through `received → patch_proposed`. The `patchProposal` carries a deterministic `summary`, `suggestedFiles` (the source file when known, otherwise the element's `cssPath`/`selector`), and a readable mock `diffPreview`. It is a stand-in for the planned AI patch step: no AI is called and no repository files are read.
 
 The server is exposed as a factory for tests and embedding:
 
@@ -317,7 +321,7 @@ packages/
   annotation-cli/        Planned local patch pull/apply workflow
 
 apps/
-  platform-starter/      Current minimal HTTP ingest API (validate + store tasks)
+  platform-starter/      Current minimal HTTP ingest API (validate + store tasks + mock patch)
 examples/
   playground/            Current local SDK verification page
   vite-react/            Current React source metadata verification page

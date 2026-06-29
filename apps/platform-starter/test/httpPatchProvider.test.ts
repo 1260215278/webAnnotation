@@ -110,6 +110,22 @@ describe("createHttpPatchProvider", () => {
     )
   })
 
+  it("throws a readable validation error for empty provider result fields", async () => {
+    const provider = createHttpPatchProvider({
+      endpoint: "https://provider.example.com/patch",
+      fetch: async () =>
+        responseJson({
+          summary: "",
+          suggestedFiles: ["src/App.tsx"],
+          diffPreview: "--- a/src/App.tsx\n+++ b/src/App.tsx",
+        }),
+    })
+
+    await expect(provider.generatePatch(buildPatchProviderInput(makeTask()))).rejects.toThrow(
+      "patch provider response is invalid: summary must not be empty",
+    )
+  })
+
   it("requires a non-empty endpoint", () => {
     expect(() => createHttpPatchProvider({ endpoint: " " })).toThrow(
       "patch provider endpoint is required",

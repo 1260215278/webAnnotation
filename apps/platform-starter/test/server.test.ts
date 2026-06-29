@@ -419,6 +419,29 @@ describe("POST /api/tasks/:id/patch", () => {
     expect(task.patchProposal).toBeUndefined()
   })
 
+  it("returns a readable error when a direct provider returns an invalid result", async () => {
+    const taskId = await createTask()
+    const invalidProvider = {
+      generatePatch() {
+        return { summary: "", suggestedFiles: [], diffPreview: "" }
+      },
+    } as unknown as TestRuntimeOptions["patchProvider"]
+
+    const res = await request("POST", `/api/tasks/${taskId}/patch`, undefined, {
+      patchProvider: invalidProvider,
+    })
+
+    expect(res.status).toBe(502)
+    expect((res.body as { error: string }).error).toBe("patch provider response is invalid")
+    expect((res.body as { message: string }).message).toBe(
+      "patch provider response is invalid: summary must not be empty",
+    )
+    const detail = await request("GET", `/api/tasks/${taskId}`)
+    const { task } = detail.body as { task: { status: string; patchProposal?: unknown } }
+    expect(task.status).toBe("received")
+    expect(task.patchProposal).toBeUndefined()
+  })
+
   it("returns 404 for an unknown task", async () => {
     const res = await request("POST", "/api/tasks/task_missing/patch", undefined, {
       patchProvider: {

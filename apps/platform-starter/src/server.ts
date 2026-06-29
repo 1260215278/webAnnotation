@@ -14,8 +14,12 @@ import type { RepoSourceContextOptions } from "@web-annotation/node"
 import { createTaskStore } from "./store"
 import type { Task, TaskStore } from "./store"
 import { buildMockPatchProposal } from "./mockPatch"
-import { buildPatchProviderInput, buildProviderPatchProposal } from "./patchProvider"
-import type { PatchProvider } from "./patchProvider"
+import {
+  buildPatchProviderInput,
+  buildProviderPatchProposal,
+  validatePatchProviderResult,
+} from "./patchProvider"
+import type { PatchProvider, PatchProviderResult } from "./patchProvider"
 import {
   PATCH_REVIEW_DECISIONS,
   buildPatchReview,
@@ -244,13 +248,23 @@ async function proposeProviderPatch(
     return { status: 409, body: { error: "patch provider is not configured", id } }
   }
 
-  let result
+  let rawResult: unknown
   try {
-    result = await options.patchProvider.generatePatch(buildPatchProviderInput(task))
+    rawResult = await options.patchProvider.generatePatch(buildPatchProviderInput(task))
   } catch (error) {
     return {
       status: 502,
       body: { error: "patch provider failed", message: errorMessage(error), id },
+    }
+  }
+
+  let result: PatchProviderResult
+  try {
+    result = validatePatchProviderResult(rawResult)
+  } catch (error) {
+    return {
+      status: 502,
+      body: { error: "patch provider response is invalid", message: errorMessage(error), id },
     }
   }
 

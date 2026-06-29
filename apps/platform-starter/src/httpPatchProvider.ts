@@ -1,4 +1,5 @@
-import type { PatchProvider, PatchProviderInput, PatchProviderResult } from "./patchProvider"
+import { validatePatchProviderResult } from "./patchProvider"
+import type { PatchProvider, PatchProviderInput } from "./patchProvider"
 
 export interface HttpPatchProviderOptions {
   endpoint: string
@@ -6,37 +7,6 @@ export interface HttpPatchProviderOptions {
   headers?: Record<string, string>
   fetch?: typeof fetch
   timeoutMs?: number
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function validatePatchProviderResult(input: unknown): PatchProviderResult {
-  if (!isObject(input)) {
-    throw new Error("patch provider response is invalid: response must be an object")
-  }
-  if (typeof input.summary !== "string") {
-    throw new Error("patch provider response is invalid: summary must be a string")
-  }
-  if (!Array.isArray(input.suggestedFiles)) {
-    throw new Error("patch provider response is invalid: suggestedFiles must be an array")
-  }
-  if (!input.suggestedFiles.every((file) => typeof file === "string")) {
-    throw new Error("patch provider response is invalid: suggestedFiles must contain strings")
-  }
-  if (typeof input.diffPreview !== "string") {
-    throw new Error("patch provider response is invalid: diffPreview must be a string")
-  }
-  if (input.metadata !== undefined && !isObject(input.metadata)) {
-    throw new Error("patch provider response is invalid: metadata must be an object")
-  }
-  return {
-    summary: input.summary,
-    suggestedFiles: input.suggestedFiles,
-    diffPreview: input.diffPreview,
-    metadata: input.metadata,
-  }
 }
 
 function sanitize(text: string, token: string | undefined): string {

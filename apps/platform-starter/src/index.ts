@@ -1,7 +1,11 @@
 export { createPlatformServer, handlePlatformRequest } from "./server"
 export { createTaskStore } from "./store"
 export { buildMockPatchProposal } from "./mockPatch"
-export { buildPatchProviderInput, buildProviderPatchProposal } from "./patchProvider"
+export {
+  buildPatchProviderInput,
+  buildProviderPatchProposal,
+  validatePatchProviderResult,
+} from "./patchProvider"
 export {
   PATCH_REVIEW_DECISIONS,
   buildPatchReview,

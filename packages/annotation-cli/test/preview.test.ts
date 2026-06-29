@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest"
 import {
   formatApplyDryRunPlan,
+  formatPatchCheckReport,
   formatPatchArtifactPreview,
   runApplyDryRunCommand,
+  runApplyCheckCommand,
   runCliCommand,
   runPreviewCommand,
   validatePatchArtifactInput,
@@ -293,17 +295,140 @@ describe("runApplyDryRunCommand", () => {
   })
 })
 
+describe("formatPatchCheckReport", () => {
+  it("formats a stable patch check report", () => {
+    const result = validatePatchArtifactInput(makeArtifact())
+    if (!result.ok) throw new Error("fixture should be valid")
+
+    expect(
+      formatPatchCheckReport({
+        artifact: result.artifact,
+        repoRoot: "/repo/web-console",
+        suggestedFiles: ["src/App.tsx"],
+      }),
+    ).toBe(
+      [
+        "Patch check report",
+        "Task: task_example [patch_accepted]",
+        "Repo root: /repo/web-console",
+        "Suggested files:",
+        "- src/App.tsx",
+        "Review: accepted",
+        "Patch check: passed",
+        "Safety:",
+        "- appliesPatch: false",
+        "- writesFiles: false",
+        "- createsCommit: false",
+        "",
+      ].join("\n"),
+    )
+  })
+})
+
+describe("runApplyCheckCommand", () => {
+  it("returns a check report for a valid artifact in a clean repository", async () => {
+    const calls: string[] = []
+    const result = await runApplyCheckCommand(["apply", "--file", "artifact.json", "--check"], {
+      readFile: async () => JSON.stringify(makeArtifact()),
+      getRepoRoot: async () => {
+        calls.push("getRepoRoot")
+        return "/repo/web-console"
+      },
+      getGitStatus: async () => {
+        calls.push("getGitStatus")
+        return ""
+      },
+      checkPatch: async (diffPreview) => {
+        calls.push(`checkPatch:${diffPreview}`)
+      },
+    })
+
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Patch check report")
+    expect(result.stdout).toContain("Repo root: /repo/web-console")
+    expect(result.stdout).toContain("- src/App.tsx")
+    expect(result.stdout).toContain("Review: accepted")
+    expect(result.stdout).toContain("Patch check: passed")
+    expect(result.stdout).toContain("- appliesPatch: false")
+    expect(result.stdout).toContain("- writesFiles: false")
+    expect(result.stdout).toContain("- createsCommit: false")
+    expect(calls).toEqual([
+      "getRepoRoot",
+      "getGitStatus",
+      "checkPatch:--- a/src/App.tsx\n+++ b/src/App.tsx\n@@\n- Submit\n+ Save settings",
+    ])
+  })
+
+  it("returns a readable error when patch check fails", async () => {
+    const result = await runApplyCheckCommand(["apply", "--file", "artifact.json", "--check"], {
+      readFile: async () => JSON.stringify(makeArtifact()),
+      getRepoRoot: async () => "/repo/web-console",
+      getGitStatus: async () => "",
+      checkPatch: async () => {
+        throw new Error("patch does not apply")
+      },
+    })
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "Patch check failed: patch does not apply\n",
+    })
+  })
+
+  it("rejects check when the working tree is dirty", async () => {
+    const result = await runApplyCheckCommand(["apply", "--file", "artifact.json", "--check"], {
+      readFile: async () => JSON.stringify(makeArtifact()),
+      getRepoRoot: async () => "/repo/web-console",
+      getGitStatus: async () => " M src/App.tsx\n",
+      checkPatch: async () => {
+        throw new Error("should not run")
+      },
+    })
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "Git preflight failed: working tree must be clean before patch check\n",
+    })
+  })
+
+  it("rejects unsafe suggested files before checking the patch", async () => {
+    const artifact = makeArtifact({
+      patchProposal: {
+        summary: "Unsafe path",
+        suggestedFiles: ["../outside.ts"],
+        diffPreview: "diff",
+      },
+    })
+    const result = await runApplyCheckCommand(["apply", "--file", "artifact.json", "--check"], {
+      readFile: async () => JSON.stringify(artifact),
+      getRepoRoot: async () => "/repo/web-console",
+      getGitStatus: async () => "",
+      checkPatch: async () => {
+        throw new Error("should not run")
+      },
+    })
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Invalid suggested files:")
+  })
+})
+
 describe("runCliCommand", () => {
   it("dispatches preview and apply commands", async () => {
     const deps = {
       readFile: async () => JSON.stringify(makeArtifact()),
       getRepoRoot: async () => "/repo/web-console",
       getGitStatus: async () => "",
+      checkPatch: async () => undefined,
     }
 
     expect((await runCliCommand(["preview", "--file", "artifact.json"], deps)).code).toBe(0)
     expect((await runCliCommand(["apply", "--file", "artifact.json", "--dry-run"], deps)).code).toBe(
       0,
     )
+    expect((await runCliCommand(["apply", "--file", "artifact.json", "--check"], deps)).code).toBe(0)
   })
 })

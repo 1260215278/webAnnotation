@@ -26,3 +26,4 @@ Short public milestones for the project. This file intentionally avoids detailed
 - Added Platform Starter patch artifact export: `GET /api/tasks/:id/patch-artifact` returns an export-only `web-annotation.patch-artifact.v1` JSON artifact for downstream apply workflows.
 - Added the `@web-annotation/cli` preview MVP: `web-annotation preview --file <artifact.json>` validates and prints a deterministic preview of an exported patch artifact (reads the artifact only; never applies the patch, writes files, or calls Git).
 - Added the `@web-annotation/cli` apply dry-run/preflight MVP: `web-annotation apply --file <artifact.json> --dry-run` checks a clean git repo, validates suggested file paths, and prints a deterministic no-write plan.
+- Added the `@web-annotation/cli` patch check MVP: `web-annotation apply --file <artifact.json> --check` runs `git apply --check` against the artifact diff preview without writing files.

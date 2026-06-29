@@ -49,6 +49,10 @@ export interface ApplyDryRunCommandDependencies extends PreviewCommandDependenci
   getGitStatus: () => Promise<string>
 }
 
+export interface ApplyCheckCommandDependencies extends ApplyDryRunCommandDependencies {
+  checkPatch: (diffPreview: string) => Promise<void>
+}
+
 export interface PreviewCommandResult {
   code: number
   stdout: string
@@ -60,6 +64,8 @@ export interface ApplyDryRunPlanInput {
   repoRoot: string
   suggestedFiles: string[]
 }
+
+export type PatchCheckReportInput = ApplyDryRunPlanInput
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -207,6 +213,27 @@ export function formatApplyDryRunPlan(input: ApplyDryRunPlanInput): string {
   ].join("\n")
 }
 
+export function formatPatchCheckReport(input: PatchCheckReportInput): string {
+  const suggestedFiles =
+    input.suggestedFiles.length === 0
+      ? ["- (none)"]
+      : input.suggestedFiles.map((file) => `- ${file}`)
+  return [
+    "Patch check report",
+    `Task: ${input.artifact.taskId} [${input.artifact.taskStatus}]`,
+    `Repo root: ${input.repoRoot}`,
+    "Suggested files:",
+    ...suggestedFiles,
+    `Review: ${input.artifact.patchReview?.status ?? "unreviewed"}`,
+    "Patch check: passed",
+    "Safety:",
+    "- appliesPatch: false",
+    "- writesFiles: false",
+    "- createsCommit: false",
+    "",
+  ].join("\n")
+}
+
 function previewUsage(): string {
   return "Usage: web-annotation preview --file <artifact.json>\n"
 }
@@ -215,8 +242,17 @@ function applyDryRunUsage(): string {
   return "Usage: web-annotation apply --file <artifact.json> --dry-run\n"
 }
 
+function applyCheckUsage(): string {
+  return "Usage: web-annotation apply --file <artifact.json> --check\n"
+}
+
 function cliUsage(): string {
-  return [previewUsage().trimEnd(), applyDryRunUsage().trimEnd(), ""].join("\n")
+  return [
+    previewUsage().trimEnd(),
+    applyDryRunUsage().trimEnd(),
+    applyCheckUsage().trimEnd(),
+    "",
+  ].join("\n")
 }
 
 function issueText(issues: ValidationIssue[]): string {
@@ -311,6 +347,54 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error"
 }
 
+async function prepareApplyCommand(
+  file: string,
+  deps: ApplyDryRunCommandDependencies,
+  dirtyMessage: string,
+): Promise<
+  | { ok: true; artifact: PatchArtifactPreviewInput; repoRoot: string; suggestedFiles: string[] }
+  | { ok: false; result: PreviewCommandResult }
+> {
+  const artifactResult = await readAndValidateArtifact(file, deps)
+  if (!artifactResult.ok) return artifactResult
+
+  const suggestedFilesResult = validateSuggestedFiles(
+    artifactResult.artifact.patchProposal.suggestedFiles,
+  )
+  if (!suggestedFilesResult.ok) {
+    return {
+      ok: false,
+      result: {
+        code: 1,
+        stdout: "",
+        stderr: `Invalid suggested files:\n${issueText(suggestedFilesResult.issues)}\n`,
+      },
+    }
+  }
+
+  try {
+    const repoRoot = await deps.getRepoRoot()
+    const status = await deps.getGitStatus()
+    if (status.trim().length > 0) {
+      return {
+        ok: false,
+        result: { code: 1, stdout: "", stderr: dirtyMessage },
+      }
+    }
+    return {
+      ok: true,
+      artifact: artifactResult.artifact,
+      repoRoot,
+      suggestedFiles: suggestedFilesResult.suggestedFiles,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      result: { code: 1, stdout: "", stderr: `Git preflight failed: ${errorMessage(error)}\n` },
+    }
+  }
+}
+
 export async function runPreviewCommand(
   args: string[],
   deps: PreviewCommandDependencies,
@@ -343,43 +427,59 @@ export async function runApplyDryRunCommand(
     return { code: 1, stdout: "", stderr: applyDryRunUsage() }
   }
 
-  const artifactResult = await readAndValidateArtifact(file, deps)
-  if (!artifactResult.ok) {
-    return artifactResult.result
-  }
-
-  const suggestedFilesResult = validateSuggestedFiles(
-    artifactResult.artifact.patchProposal.suggestedFiles,
+  const prepared = await prepareApplyCommand(
+    file,
+    deps,
+    "Git preflight failed: working tree must be clean before dry-run\n",
   )
-  if (!suggestedFilesResult.ok) {
-    return {
-      code: 1,
-      stdout: "",
-      stderr: `Invalid suggested files:\n${issueText(suggestedFilesResult.issues)}\n`,
-    }
-  }
-
-  let repoRoot: string
-  try {
-    repoRoot = await deps.getRepoRoot()
-    const status = await deps.getGitStatus()
-    if (status.trim().length > 0) {
-      return {
-        code: 1,
-        stdout: "",
-        stderr: "Git preflight failed: working tree must be clean before dry-run\n",
-      }
-    }
-  } catch (error) {
-    return { code: 1, stdout: "", stderr: `Git preflight failed: ${errorMessage(error)}\n` }
+  if (!prepared.ok) {
+    return prepared.result
   }
 
   return {
     code: 0,
     stdout: formatApplyDryRunPlan({
-      artifact: artifactResult.artifact,
-      repoRoot,
-      suggestedFiles: suggestedFilesResult.suggestedFiles,
+      artifact: prepared.artifact,
+      repoRoot: prepared.repoRoot,
+      suggestedFiles: prepared.suggestedFiles,
+    }),
+    stderr: "",
+  }
+}
+
+export async function runApplyCheckCommand(
+  args: string[],
+  deps: ApplyCheckCommandDependencies,
+): Promise<PreviewCommandResult> {
+  if (args[0] !== "apply" || !args.includes("--check")) {
+    return { code: 1, stdout: "", stderr: applyCheckUsage() }
+  }
+  const file = getFileArg(args)
+  if (!file) {
+    return { code: 1, stdout: "", stderr: applyCheckUsage() }
+  }
+
+  const prepared = await prepareApplyCommand(
+    file,
+    deps,
+    "Git preflight failed: working tree must be clean before patch check\n",
+  )
+  if (!prepared.ok) {
+    return prepared.result
+  }
+
+  try {
+    await deps.checkPatch(prepared.artifact.patchProposal.diffPreview)
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `Patch check failed: ${errorMessage(error)}\n` }
+  }
+
+  return {
+    code: 0,
+    stdout: formatPatchCheckReport({
+      artifact: prepared.artifact,
+      repoRoot: prepared.repoRoot,
+      suggestedFiles: prepared.suggestedFiles,
     }),
     stderr: "",
   }
@@ -387,9 +487,10 @@ export async function runApplyDryRunCommand(
 
 export function runCliCommand(
   args: string[],
-  deps: ApplyDryRunCommandDependencies,
+  deps: ApplyCheckCommandDependencies,
 ): Promise<PreviewCommandResult> {
   if (args[0] === "preview") return runPreviewCommand(args, deps)
+  if (args[0] === "apply" && args.includes("--check")) return runApplyCheckCommand(args, deps)
   if (args[0] === "apply") return runApplyDryRunCommand(args, deps)
   return Promise.resolve({ code: 1, stdout: "", stderr: cliUsage() })
 }

@@ -23,6 +23,8 @@ import {
 } from "./patchReview"
 import type { PatchReviewInput } from "./patchReview"
 import { buildPatchArtifact } from "./patchArtifact"
+import { createGitHeadCommitReader } from "./repoMetadata"
+import type { RepoHeadCommitReader } from "./repoMetadata"
 import { renderConsoleHtml } from "./console"
 
 export interface PlatformSourceContextOptions {
@@ -38,6 +40,12 @@ export interface PlatformRuntimeOptions {
   sourceContext?: PlatformSourceContextOptions
   /** Optional AI/provider integration hook. The starter never calls a model by default. */
   patchProvider?: PatchProvider
+  /**
+   * Read-only adapter that resolves the repository HEAD commit when `repoRoot` is
+   * set. `createPlatformServer` defaults this to a read-only git reader; tests
+   * inject a fake reader so unit tests never depend on real git.
+   */
+  readRepoHeadCommit?: RepoHeadCommitReader
 }
 
 export interface PlatformServerOptions extends PlatformRuntimeOptions {
@@ -286,7 +294,12 @@ function reviewPatchProposal(
   return { status: 200, body: { taskId: updated.id, status: updated.status, patchReview } }
 }
 
-function exportPatchArtifact(id: string, store: TaskStore, exportedAt: string): PlatformResponse {
+async function exportPatchArtifact(
+  id: string,
+  store: TaskStore,
+  exportedAt: string,
+  options: PlatformRuntimeOptions = {},
+): Promise<PlatformResponse> {
   const task = store.get(id)
   if (!task) {
     return { status: 404, body: { error: "task not found", id } }
@@ -295,7 +308,26 @@ function exportPatchArtifact(id: string, store: TaskStore, exportedAt: string): 
     return { status: 409, body: { error: "patch proposal does not exist", id } }
   }
 
-  return { status: 200, body: { artifact: buildPatchArtifact(task, exportedAt) } }
+  // Only resolve a base commit when repoRoot is configured. Without repoRoot the
+  // export succeeds and never adds project.commit.
+  let commit: string | undefined
+  if (options.repoRoot) {
+    const readRepoHeadCommit = options.readRepoHeadCommit ?? createGitHeadCommitReader()
+    let resolved: string
+    try {
+      resolved = await readRepoHeadCommit(options.repoRoot)
+    } catch {
+      return { status: 409, body: { error: "failed to read repo head commit", id } }
+    }
+    const trimmed = typeof resolved === "string" ? resolved.trim() : ""
+    if (trimmed === "") {
+      // Never export a fake/empty commit; fail loudly instead.
+      return { status: 409, body: { error: "failed to read repo head commit", id } }
+    }
+    commit = trimmed
+  }
+
+  return { status: 200, body: { artifact: buildPatchArtifact(task, exportedAt, commit) } }
 }
 
 export async function handlePlatformRequest(
@@ -344,7 +376,7 @@ export async function handlePlatformRequest(
     const id = decodeURIComponent(
       path.slice("/api/tasks/".length, path.length - "/patch-artifact".length),
     )
-    return exportPatchArtifact(id, store, new Date().toISOString())
+    return exportPatchArtifact(id, store, new Date().toISOString(), options)
   }
   if (method === "GET" && path.startsWith("/api/tasks/")) {
     const id = decodeURIComponent(path.slice("/api/tasks/".length))
@@ -403,6 +435,7 @@ export function createPlatformServer(options: PlatformServerOptions = {}): Platf
     repoRoot: options.repoRoot,
     sourceContext: options.sourceContext,
     patchProvider: options.patchProvider,
+    readRepoHeadCommit: options.readRepoHeadCommit ?? createGitHeadCommitReader(),
   }
   const server = createServer((req, res) => {
     handleHttpRequest(req, res, store, maxBodyBytes, runtimeOptions).catch((error) => {

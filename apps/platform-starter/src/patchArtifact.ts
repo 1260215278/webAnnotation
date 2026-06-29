@@ -33,19 +33,24 @@ export function createPatchArtifactSafety(): PatchArtifactSafety {
 
 /**
  * Build a serializable artifact for downstream CLI/Git/AI apply workflows.
- * The artifact is export-only: this helper never applies patches or writes files.
+ * The artifact is export-only: this helper never applies patches, writes files,
+ * or runs git. When `commit` is provided the caller has already resolved the
+ * repository HEAD; it is copied into the existing `project.commit` field so the
+ * CLI can run a base-commit preflight. Without it the project is passed through.
  */
-export function buildPatchArtifact(task: Task, exportedAt: string): PatchArtifact {
+export function buildPatchArtifact(task: Task, exportedAt: string, commit?: string): PatchArtifact {
   if (!task.patchProposal) {
     throw new Error("patch proposal does not exist")
   }
 
+  const project =
+    commit !== undefined ? { ...task.promptContext.project, commit } : task.promptContext.project
   const artifact: PatchArtifact = {
     version: PATCH_ARTIFACT_VERSION,
     exportedAt,
     taskId: task.id,
     taskStatus: task.status,
-    project: task.promptContext.project,
+    project,
     page: task.promptContext.page,
     annotations: task.promptContext.annotations,
     patchProposal: task.patchProposal,

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { beforeEach, describe, expect, it } from "vitest"
 import { createTaskStore, handlePlatformRequest } from "../src/index"
@@ -5,6 +6,7 @@ import type { PlatformResponse, TaskStore } from "../src/index"
 import { makeManifest, makeSafePayload, makeSourcePayload } from "./fixtures"
 
 let store: TaskStore
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url))
 const viteReactRoot = fileURLToPath(new URL("../../../examples/vite-react", import.meta.url))
 
 beforeEach(() => {
@@ -37,6 +39,7 @@ type TestRuntimeOptions = {
           metadata?: Record<string, unknown>
         }>
   }
+  readRepoHeadCommit?: (repoRoot: string) => Promise<string>
 }
 
 function request(
@@ -645,6 +648,79 @@ describe("GET /api/tasks/:id/patch-artifact", () => {
     expect(firstArtifact.patchProposal).toEqual(secondArtifact.patchProposal)
     expect(typeof firstArtifact.exportedAt).toBe("string")
     expect(typeof secondArtifact.exportedAt).toBe("string")
+  })
+
+  it("embeds project.commit from the injected reader when repoRoot is configured", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+
+    let seenRepoRoot: string | undefined
+    const res = await request("GET", `/api/tasks/${taskId}/patch-artifact`, undefined, {
+      repoRoot: "/repo/root",
+      readRepoHeadCommit: async (repoRoot) => {
+        seenRepoRoot = repoRoot
+        return "abc123def456abc123def456abc123def456abcd"
+      },
+    })
+
+    expect(res.status).toBe(200)
+    expect(seenRepoRoot).toBe("/repo/root")
+    const { artifact } = res.body as { artifact: { project: { commit?: string } } }
+    expect(artifact.project.commit).toBe("abc123def456abc123def456abc123def456abcd")
+  })
+
+  it("uses the default git reader when repoRoot is configured without an injected reader", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+    const expected = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim()
+
+    const res = await request("GET", `/api/tasks/${taskId}/patch-artifact`, undefined, {
+      repoRoot,
+    })
+
+    expect(res.status).toBe(200)
+    const { artifact } = res.body as { artifact: { project: { commit?: string } } }
+    expect(artifact.project.commit).toBe(expected)
+  })
+
+  it("omits project.commit when repoRoot is not configured", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+
+    const res = await request("GET", `/api/tasks/${taskId}/patch-artifact`)
+    expect(res.status).toBe(200)
+    const { artifact } = res.body as { artifact: { project: { commit?: string } } }
+    expect(artifact.project.commit).toBeUndefined()
+  })
+
+  it("returns a fixed readable error and no artifact when the commit reader fails", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+
+    const res = await request("GET", `/api/tasks/${taskId}/patch-artifact`, undefined, {
+      repoRoot: "/repo/root",
+      readRepoHeadCommit: async () => {
+        throw new Error("not a git repository")
+      },
+    })
+
+    expect(res.status).toBe(409)
+    expect((res.body as { error: string }).error).toBe("failed to read repo head commit")
+    expect((res.body as { artifact?: unknown }).artifact).toBeUndefined()
+  })
+
+  it("never exports an empty/fake commit when the reader returns blank", async () => {
+    const taskId = await createTask()
+    await request("POST", `/api/tasks/${taskId}/mock-patch`)
+
+    const res = await request("GET", `/api/tasks/${taskId}/patch-artifact`, undefined, {
+      repoRoot: "/repo/root",
+      readRepoHeadCommit: async () => "   ",
+    })
+
+    expect(res.status).toBe(409)
+    expect((res.body as { error: string }).error).toBe("failed to read repo head commit")
+    expect((res.body as { artifact?: unknown }).artifact).toBeUndefined()
   })
 })
 

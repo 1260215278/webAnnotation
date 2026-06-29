@@ -57,7 +57,7 @@ The Platform Starter ingest API currently supports:
 - `POST /api/tasks/:id/patch`: call an injected patch provider to create a patch proposal (idempotent).
 - `POST /api/tasks/:id/mock-patch`: generate a deterministic mock patch proposal, moving the task to `patch_proposed` (idempotent).
 - `POST /api/tasks/:id/patch-review`: record a human `accept` / `reject` / `changes_requested` decision on a proposal (records the decision only; never applies the patch).
-- `GET /api/tasks/:id/patch-artifact`: export a `web-annotation.patch-artifact.v1` JSON artifact for downstream CLI/Git/AI apply workflows (export only; never writes files).
+- `GET /api/tasks/:id/patch-artifact`: export a `web-annotation.patch-artifact.v1` JSON artifact for downstream CLI/Git/AI apply workflows (export only; never writes files). When `repoRoot` is configured the artifact's existing `project.commit` field carries the current repo `HEAD`, so the CLI can run a base-commit preflight.
 - `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, triggering provider/mock patches, reviewing proposals, and viewing patch artifacts.
 - `createHttpPatchProvider(options)`: a generic HTTP adapter for connecting an external AI/custom patch service.
 - In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
@@ -263,6 +263,8 @@ Enable repo source-context collection by pointing the starter at a local checkou
 WEB_ANNOTATION_REPO_ROOT=/abs/path/to/your/repo pnpm --filter @web-annotation/platform-starter dev
 # REPO_ROOT is also supported when WEB_ANNOTATION_REPO_ROOT is not set.
 ```
+
+When `repoRoot` is configured, the starter also stamps the exported patch artifact's existing `project.commit` field with the repository's current `HEAD`, read through a read-only `git -C <repoRoot> rev-parse HEAD`. This lets the CLI verify repo identity via its base-commit preflight before applying. The commit read is the only git use here: the starter still never applies patches, writes files, commits, or pushes. If the commit cannot be read (e.g. `repoRoot` is not a git repository), `GET /api/tasks/:id/patch-artifact` returns `409 { error: "failed to read repo head commit" }` rather than exporting a fake commit. When `repoRoot` is not set, the export succeeds without adding `project.commit`.
 
 Enable an external HTTP patch provider:
 

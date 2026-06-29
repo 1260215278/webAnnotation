@@ -15,6 +15,7 @@ export {
   createPatchArtifactSafety,
 } from "./patchArtifact"
 export { createHttpPatchProvider } from "./httpPatchProvider"
+export { createGitHeadCommitReader } from "./repoMetadata"
 export { createPlatformServerOptionsFromEnv, readPlatformPortFromEnv } from "./env"
 export { renderConsoleHtml } from "./console"
 
@@ -42,4 +43,5 @@ export type { PatchProvider, PatchProviderInput, PatchProviderResult } from "./p
 export type { PatchReviewInput } from "./patchReview"
 export type { PatchArtifact, PatchArtifactSafety } from "./patchArtifact"
 export type { HttpPatchProviderOptions } from "./httpPatchProvider"
+export type { RepoHeadCommitReader } from "./repoMetadata"
 export type { PlatformEnvDependencies } from "./env"

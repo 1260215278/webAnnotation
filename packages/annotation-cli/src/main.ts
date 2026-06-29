@@ -63,6 +63,7 @@ void runCliCommand(process.argv.slice(2), {
   readFile: (file) => readFile(file, "utf8"),
   getRepoRoot: () => readGit(["rev-parse", "--show-toplevel"]),
   getGitStatus: () => readGit(["status", "--short"]),
+  getCurrentCommit: () => readGit(["rev-parse", "HEAD"]),
   checkPatch,
   checkBranchName: (branchName) => readGit(["check-ref-format", "--branch", branchName]).then(() => undefined),
   createBranch: (branchName) => execGit(["switch", "-c", branchName]),

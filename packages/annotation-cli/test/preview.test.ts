@@ -64,6 +64,12 @@ function makeGitDiffArtifact(overrides: Record<string, unknown> = {}): Record<st
   })
 }
 
+function makeArtifactWithCommit(commit: string): Record<string, unknown> {
+  return makeGitDiffArtifact({
+    project: { projectId: "web-console", commit },
+  })
+}
+
 describe("validatePatchArtifactInput", () => {
   it("accepts a valid export-only patch artifact", () => {
     const result = validatePatchArtifactInput(makeArtifact())
@@ -195,12 +201,14 @@ describe("formatApplyDryRunPlan", () => {
         artifact: result.artifact,
         repoRoot: "/repo/web-console",
         suggestedFiles: ["src/App.tsx"],
+        baseCommit: { status: "not provided" },
       }),
     ).toBe(
       [
         "Apply dry-run plan",
         "Task: task_example [patch_accepted]",
         "Repo root: /repo/web-console",
+        "Base commit: not provided",
         "Suggested files:",
         "- src/App.tsx",
         "Review: accepted",
@@ -235,6 +243,7 @@ describe("runApplyDryRunCommand", () => {
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("Apply dry-run plan")
     expect(result.stdout).toContain("Repo root: /repo/web-console")
+    expect(result.stdout).toContain("Base commit: not provided")
     expect(result.stdout).toContain("- src/App.tsx")
     expect(result.stdout).toContain("Review: accepted")
     expect(result.stdout).toContain("- appliesPatch: false")
@@ -242,6 +251,76 @@ describe("runApplyDryRunCommand", () => {
     expect(result.stdout).toContain("- createsCommit: false")
     expect(result.stdout).toContain("Diff preview:")
     expect(calls).toEqual(["getRepoRoot", "getGitStatus"])
+  })
+
+  it("reports a matched base commit before returning a dry-run plan", async () => {
+    const calls: string[] = []
+    const result = await runApplyDryRunCommand(["apply", "--file", "artifact.json", "--dry-run"], {
+      readFile: async () => JSON.stringify(makeArtifactWithCommit("abc123")),
+      getRepoRoot: async () => {
+        calls.push("getRepoRoot")
+        return "/repo/web-console"
+      },
+      getGitStatus: async () => {
+        calls.push("getGitStatus")
+        return ""
+      },
+      getCurrentCommit: async () => {
+        calls.push("getCurrentCommit")
+        return "abc123"
+      },
+    })
+
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Base commit: matched")
+    expect(result.stdout).toContain("Expected commit: abc123")
+    expect(result.stdout).toContain("Current commit: abc123")
+    expect(calls).toEqual(["getRepoRoot", "getGitStatus", "getCurrentCommit"])
+  })
+
+  it("rejects a dry-run when the artifact base commit does not match HEAD", async () => {
+    const calls: string[] = []
+    const result = await runApplyDryRunCommand(["apply", "--file", "artifact.json", "--dry-run"], {
+      readFile: async () => JSON.stringify(makeArtifactWithCommit("expected123")),
+      getRepoRoot: async () => {
+        calls.push("getRepoRoot")
+        return "/repo/web-console"
+      },
+      getGitStatus: async () => {
+        calls.push("getGitStatus")
+        return ""
+      },
+      getCurrentCommit: async () => {
+        calls.push("getCurrentCommit")
+        return "current456"
+      },
+    })
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr:
+        "Base commit preflight failed: expected expected123 but current HEAD is current456\n",
+    })
+    expect(calls).toEqual(["getRepoRoot", "getGitStatus", "getCurrentCommit"])
+  })
+
+  it("returns a readable error when the current commit cannot be read", async () => {
+    const result = await runApplyDryRunCommand(["apply", "--file", "artifact.json", "--dry-run"], {
+      readFile: async () => JSON.stringify(makeArtifactWithCommit("abc123")),
+      getRepoRoot: async () => "/repo/web-console",
+      getGitStatus: async () => "",
+      getCurrentCommit: async () => {
+        throw new Error("rev-parse failed")
+      },
+    })
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "Base commit preflight failed: rev-parse failed\n",
+    })
   })
 
   it("rejects apply without dry-run", async () => {
@@ -322,12 +401,14 @@ describe("formatPatchCheckReport", () => {
         artifact: result.artifact,
         repoRoot: "/repo/web-console",
         suggestedFiles: ["src/App.tsx"],
+        baseCommit: { status: "not provided" },
       }),
     ).toBe(
       [
         "Patch check report",
         "Task: task_example [patch_accepted]",
         "Repo root: /repo/web-console",
+        "Base commit: not provided",
         "Suggested files:",
         "- src/App.tsx",
         "Review: accepted",
@@ -364,6 +445,7 @@ describe("runApplyCheckCommand", () => {
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("Patch check report")
     expect(result.stdout).toContain("Repo root: /repo/web-console")
+    expect(result.stdout).toContain("Base commit: not provided")
     expect(result.stdout).toContain("- src/App.tsx")
     expect(result.stdout).toContain("Review: accepted")
     expect(result.stdout).toContain("Patch check: passed")
@@ -375,6 +457,62 @@ describe("runApplyCheckCommand", () => {
       "getGitStatus",
       "checkPatch:--- a/src/App.tsx\n+++ b/src/App.tsx\n@@\n- Submit\n+ Save settings",
     ])
+  })
+
+  it("checks a matched base commit before running git apply --check", async () => {
+    const calls: string[] = []
+    const result = await runApplyCheckCommand(["apply", "--file", "artifact.json", "--check"], {
+      readFile: async () => JSON.stringify(makeArtifactWithCommit("abc123")),
+      getRepoRoot: async () => {
+        calls.push("getRepoRoot")
+        return "/repo/web-console"
+      },
+      getGitStatus: async () => {
+        calls.push("getGitStatus")
+        return ""
+      },
+      getCurrentCommit: async () => {
+        calls.push("getCurrentCommit")
+        return "abc123"
+      },
+      checkPatch: async () => {
+        calls.push("checkPatch")
+      },
+    })
+
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Base commit: matched")
+    expect(result.stdout).toContain("Expected commit: abc123")
+    expect(result.stdout).toContain("Current commit: abc123")
+    expect(calls).toEqual(["getRepoRoot", "getGitStatus", "getCurrentCommit", "checkPatch"])
+  })
+
+  it("rejects a base commit mismatch before running git apply --check", async () => {
+    const calls: string[] = []
+    const result = await runApplyCheckCommand(["apply", "--file", "artifact.json", "--check"], {
+      readFile: async () => JSON.stringify(makeArtifactWithCommit("expected123")),
+      getRepoRoot: async () => {
+        calls.push("getRepoRoot")
+        return "/repo/web-console"
+      },
+      getGitStatus: async () => {
+        calls.push("getGitStatus")
+        return ""
+      },
+      getCurrentCommit: async () => {
+        calls.push("getCurrentCommit")
+        return "current456"
+      },
+      checkPatch: async () => {
+        calls.push("checkPatch")
+      },
+    })
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("expected expected123")
+    expect(result.stderr).toContain("current HEAD is current456")
+    expect(calls).toEqual(["getRepoRoot", "getGitStatus", "getCurrentCommit"])
   })
 
   it("returns a readable error when patch check fails", async () => {
@@ -443,12 +581,14 @@ describe("formatApplyReport", () => {
         artifact: result.artifact,
         repoRoot: "/repo/web-console",
         suggestedFiles: ["src/App.tsx"],
+        baseCommit: { status: "not provided" },
       }),
     ).toBe(
       [
         "Patch apply report",
         "Task: task_example [patch_accepted]",
         "Repo root: /repo/web-console",
+        "Base commit: not provided",
         "Applied files:",
         "- src/App.tsx",
         "Review: accepted",
@@ -473,6 +613,7 @@ describe("formatBranchCommitReport", () => {
         repoRoot: "/repo/web-console",
         suggestedFiles: ["src/App.tsx"],
         branchName: "webannotation/task-example",
+        baseCommit: { status: "not provided" },
       }),
     ).toBe(
       [
@@ -480,6 +621,7 @@ describe("formatBranchCommitReport", () => {
         "Task: task_example [patch_accepted]",
         "Repo root: /repo/web-console",
         "Branch: webannotation/task-example",
+        "Base commit: not provided",
         "Committed files:",
         "- src/App.tsx",
         "Review: accepted",
@@ -521,6 +663,7 @@ describe("runApplyConfirmedCommand", () => {
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("Patch apply report")
     expect(result.stdout).toContain("Repo root: /repo/web-console")
+    expect(result.stdout).toContain("Base commit: not provided")
     expect(result.stdout).toContain("- src/App.tsx")
     expect(result.stdout).toContain("Review: accepted")
     expect(result.stdout).toContain("Patch check: passed")
@@ -532,6 +675,68 @@ describe("runApplyConfirmedCommand", () => {
       "checkPatch:--- a/src/App.tsx\n+++ b/src/App.tsx\n@@\n- Submit\n+ Save settings",
       "applyPatch:--- a/src/App.tsx\n+++ b/src/App.tsx\n@@\n- Submit\n+ Save settings",
     ])
+  })
+
+  it("applies a valid artifact when the base commit matches HEAD", async () => {
+    const calls: string[] = []
+    const result = await runApplyConfirmedCommand(["apply", "--file", "artifact.json", "--yes"], {
+      readFile: async () => JSON.stringify(makeArtifactWithCommit("abc123")),
+      getRepoRoot: async () => {
+        calls.push("getRepoRoot")
+        return "/repo/web-console"
+      },
+      getGitStatus: async () => {
+        calls.push("getGitStatus")
+        return ""
+      },
+      getCurrentCommit: async () => {
+        calls.push("getCurrentCommit")
+        return "abc123"
+      },
+      checkPatch: async () => {
+        calls.push("checkPatch")
+      },
+      applyPatch: async () => {
+        calls.push("applyPatch")
+      },
+    })
+
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Base commit: matched")
+    expect(result.stdout).toContain("Expected commit: abc123")
+    expect(result.stdout).toContain("Current commit: abc123")
+    expect(calls).toEqual(["getRepoRoot", "getGitStatus", "getCurrentCommit", "checkPatch", "applyPatch"])
+  })
+
+  it("rejects a base commit mismatch before checking or applying", async () => {
+    const calls: string[] = []
+    const result = await runApplyConfirmedCommand(["apply", "--file", "artifact.json", "--yes"], {
+      readFile: async () => JSON.stringify(makeArtifactWithCommit("expected123")),
+      getRepoRoot: async () => {
+        calls.push("getRepoRoot")
+        return "/repo/web-console"
+      },
+      getGitStatus: async () => {
+        calls.push("getGitStatus")
+        return ""
+      },
+      getCurrentCommit: async () => {
+        calls.push("getCurrentCommit")
+        return "current456"
+      },
+      checkPatch: async () => {
+        calls.push("checkPatch")
+      },
+      applyPatch: async () => {
+        calls.push("applyPatch")
+      },
+    })
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("expected expected123")
+    expect(result.stderr).toContain("current HEAD is current456")
+    expect(calls).toEqual(["getRepoRoot", "getGitStatus", "getCurrentCommit"])
   })
 
   it("rejects apply without yes confirmation", async () => {
@@ -854,6 +1059,7 @@ describe("runApplyConfirmedCommand", () => {
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("Patch branch commit report")
     expect(result.stdout).toContain("Branch: webannotation/task-example")
+    expect(result.stdout).toContain("Base commit: not provided")
     expect(result.stdout).toContain("Git add: staged selected files")
     expect(result.stdout).toContain("Git commit: created")
     expect(result.stdout).toContain("- push: false")
@@ -868,6 +1074,128 @@ describe("runApplyConfirmedCommand", () => {
       "stageFiles:src/App.tsx",
       "commitChanges:Update copy",
     ])
+  })
+
+  it("commits a valid artifact when the base commit matches HEAD", async () => {
+    const calls: string[] = []
+    const result = await runApplyConfirmedCommand(
+      [
+        "apply",
+        "--file",
+        "artifact.json",
+        "--yes",
+        "--branch",
+        "webannotation/task-example",
+        "--commit",
+        "--message",
+        "Update copy",
+      ],
+      {
+        readFile: async () => JSON.stringify(makeArtifactWithCommit("abc123")),
+        getRepoRoot: async () => {
+          calls.push("getRepoRoot")
+          return "/repo/web-console"
+        },
+        getGitStatus: async () => {
+          calls.push("getGitStatus")
+          return ""
+        },
+        getCurrentCommit: async () => {
+          calls.push("getCurrentCommit")
+          return "abc123"
+        },
+        checkPatch: async () => {
+          calls.push("checkPatch")
+        },
+        checkBranchName: async () => {
+          calls.push("checkBranchName")
+        },
+        createBranch: async () => {
+          calls.push("createBranch")
+        },
+        applyPatch: async () => {
+          calls.push("applyPatch")
+        },
+        stageFiles: async () => {
+          calls.push("stageFiles")
+        },
+        commitChanges: async () => {
+          calls.push("commitChanges")
+        },
+      },
+    )
+
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Base commit: matched")
+    expect(result.stdout).toContain("Expected commit: abc123")
+    expect(result.stdout).toContain("Current commit: abc123")
+    expect(calls).toEqual([
+      "getRepoRoot",
+      "getGitStatus",
+      "getCurrentCommit",
+      "checkPatch",
+      "checkBranchName",
+      "createBranch",
+      "applyPatch",
+      "stageFiles",
+      "commitChanges",
+    ])
+  })
+
+  it("rejects a base commit mismatch before any branch or commit write", async () => {
+    const calls: string[] = []
+    const result = await runApplyConfirmedCommand(
+      [
+        "apply",
+        "--file",
+        "artifact.json",
+        "--yes",
+        "--branch",
+        "webannotation/task-example",
+        "--commit",
+        "--message",
+        "Update copy",
+      ],
+      {
+        readFile: async () => JSON.stringify(makeArtifactWithCommit("expected123")),
+        getRepoRoot: async () => {
+          calls.push("getRepoRoot")
+          return "/repo/web-console"
+        },
+        getGitStatus: async () => {
+          calls.push("getGitStatus")
+          return ""
+        },
+        getCurrentCommit: async () => {
+          calls.push("getCurrentCommit")
+          return "current456"
+        },
+        checkPatch: async () => {
+          calls.push("checkPatch")
+        },
+        checkBranchName: async () => {
+          calls.push("checkBranchName")
+        },
+        createBranch: async () => {
+          calls.push("createBranch")
+        },
+        applyPatch: async () => {
+          calls.push("applyPatch")
+        },
+        stageFiles: async () => {
+          calls.push("stageFiles")
+        },
+        commitChanges: async () => {
+          calls.push("commitChanges")
+        },
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("expected expected123")
+    expect(result.stderr).toContain("current HEAD is current456")
+    expect(calls).toEqual(["getRepoRoot", "getGitStatus", "getCurrentCommit"])
   })
 })
 

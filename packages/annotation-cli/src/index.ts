@@ -25,6 +25,9 @@ export interface PatchArtifactPreviewInput {
   taskStatus: string
   project: {
     projectId: string
+    environment?: string
+    release?: string
+    commit?: string
   }
   page: {
     route: string
@@ -47,6 +50,7 @@ export interface PreviewCommandDependencies {
 export interface ApplyDryRunCommandDependencies extends PreviewCommandDependencies {
   getRepoRoot: () => Promise<string>
   getGitStatus: () => Promise<string>
+  getCurrentCommit?: () => Promise<string>
 }
 
 export interface ApplyCheckCommandDependencies extends ApplyDryRunCommandDependencies {
@@ -94,6 +98,7 @@ export interface ApplyDryRunPlanInput {
   artifact: PatchArtifactPreviewInput
   repoRoot: string
   suggestedFiles: string[]
+  baseCommit: BaseCommitPreflight
 }
 
 export type PatchCheckReportInput = ApplyDryRunPlanInput
@@ -106,6 +111,10 @@ export interface PullReportInput {
   artifact: PatchArtifactPreviewInput
   outFile: string
 }
+
+export type BaseCommitPreflight =
+  | { status: "not provided" }
+  | { status: "matched"; expected: string; current: string }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -175,6 +184,15 @@ export function validatePatchArtifactInput(input: unknown): ValidatePatchArtifac
   if (typeof input.project.projectId !== "string") {
     return { ok: false, issues: [stringIssue("project.projectId")] }
   }
+  if ("environment" in input.project && typeof input.project.environment !== "string") {
+    return { ok: false, issues: [stringIssue("project.environment")] }
+  }
+  if ("release" in input.project && typeof input.project.release !== "string") {
+    return { ok: false, issues: [stringIssue("project.release")] }
+  }
+  if ("commit" in input.project && typeof input.project.commit !== "string") {
+    return { ok: false, issues: [stringIssue("project.commit")] }
+  }
   if (!isRecord(input.page)) {
     return { ok: false, issues: [{ path: "page", message: "page must be an object" }] }
   }
@@ -189,11 +207,18 @@ export function validatePatchArtifactInput(input: unknown): ValidatePatchArtifac
   if (safetyIssues.length > 0) return { ok: false, issues: safetyIssues }
 
   const patchProposal = input.patchProposal as Record<string, unknown>
+  const project: PatchArtifactPreviewInput["project"] = {
+    projectId: input.project.projectId,
+  }
+  if (typeof input.project.environment === "string") project.environment = input.project.environment
+  if (typeof input.project.release === "string") project.release = input.project.release
+  if (typeof input.project.commit === "string") project.commit = input.project.commit
+
   const artifact: PatchArtifactPreviewInput = {
     version: PATCH_ARTIFACT_VERSION,
     taskId: input.taskId,
     taskStatus: input.taskStatus,
-    project: { projectId: input.project.projectId },
+    project,
     page: { route: input.page.route },
     patchProposal: {
       summary: patchProposal.summary as string,
@@ -210,6 +235,15 @@ export function validatePatchArtifactInput(input: unknown): ValidatePatchArtifac
     artifact.patchReview = { status: input.patchReview.status }
   }
   return { ok: true, artifact }
+}
+
+function formatBaseCommitLines(baseCommit: BaseCommitPreflight): string[] {
+  if (baseCommit.status === "not provided") return ["Base commit: not provided"]
+  return [
+    "Base commit: matched",
+    `Expected commit: ${baseCommit.expected}`,
+    `Current commit: ${baseCommit.current}`,
+  ]
 }
 
 export function formatPatchArtifactPreview(artifact: PatchArtifactPreviewInput): string {
@@ -240,6 +274,7 @@ export function formatApplyDryRunPlan(input: ApplyDryRunPlanInput): string {
     "Apply dry-run plan",
     `Task: ${input.artifact.taskId} [${input.artifact.taskStatus}]`,
     `Repo root: ${input.repoRoot}`,
+    ...formatBaseCommitLines(input.baseCommit),
     "Suggested files:",
     ...suggestedFiles,
     `Review: ${input.artifact.patchReview?.status ?? "unreviewed"}`,
@@ -262,6 +297,7 @@ export function formatPatchCheckReport(input: PatchCheckReportInput): string {
     "Patch check report",
     `Task: ${input.artifact.taskId} [${input.artifact.taskStatus}]`,
     `Repo root: ${input.repoRoot}`,
+    ...formatBaseCommitLines(input.baseCommit),
     "Suggested files:",
     ...suggestedFiles,
     `Review: ${input.artifact.patchReview?.status ?? "unreviewed"}`,
@@ -283,6 +319,7 @@ export function formatApplyReport(input: ApplyReportInput): string {
     "Patch apply report",
     `Task: ${input.artifact.taskId} [${input.artifact.taskStatus}]`,
     `Repo root: ${input.repoRoot}`,
+    ...formatBaseCommitLines(input.baseCommit),
     "Applied files:",
     ...suggestedFiles,
     `Review: ${input.artifact.patchReview?.status ?? "unreviewed"}`,
@@ -304,6 +341,7 @@ export function formatBranchCommitReport(input: BranchCommitReportInput): string
     `Task: ${input.artifact.taskId} [${input.artifact.taskStatus}]`,
     `Repo root: ${input.repoRoot}`,
     `Branch: ${input.branchName}`,
+    ...formatBaseCommitLines(input.baseCommit),
     "Committed files:",
     ...suggestedFiles,
     `Review: ${input.artifact.patchReview?.status ?? "unreviewed"}`,
@@ -675,7 +713,13 @@ async function prepareApplyCommand(
   deps: ApplyDryRunCommandDependencies,
   dirtyMessage: string,
 ): Promise<
-  | { ok: true; artifact: PatchArtifactPreviewInput; repoRoot: string; suggestedFiles: string[] }
+  | {
+      ok: true
+      artifact: PatchArtifactPreviewInput
+      repoRoot: string
+      suggestedFiles: string[]
+      baseCommit: BaseCommitPreflight
+    }
   | { ok: false; result: PreviewCommandResult }
 > {
   const artifactResult = await readAndValidateArtifact(file, deps)
@@ -704,6 +748,44 @@ async function prepareApplyCommand(
         result: { code: 1, stdout: "", stderr: dirtyMessage },
       }
     }
+    const expectedCommit = artifactResult.artifact.project.commit
+    let baseCommit: BaseCommitPreflight = { status: "not provided" }
+    if (expectedCommit !== undefined) {
+      if (typeof deps.getCurrentCommit !== "function") {
+        return {
+          ok: false,
+          result: {
+            code: 1,
+            stdout: "",
+            stderr: "Base commit preflight failed: current commit reader is not configured\n",
+          },
+        }
+      }
+      let currentCommit: string
+      try {
+        currentCommit = await deps.getCurrentCommit()
+      } catch (error) {
+        return {
+          ok: false,
+          result: {
+            code: 1,
+            stdout: "",
+            stderr: `Base commit preflight failed: ${errorMessage(error)}\n`,
+          },
+        }
+      }
+      if (currentCommit !== expectedCommit) {
+        return {
+          ok: false,
+          result: {
+            code: 1,
+            stdout: "",
+            stderr: `Base commit preflight failed: expected ${expectedCommit} but current HEAD is ${currentCommit}\n`,
+          },
+        }
+      }
+      baseCommit = { status: "matched", expected: expectedCommit, current: currentCommit }
+    }
     const diffFilesResult = validateDiffFilesMatchSuggested(
       artifactResult.artifact.patchProposal.diffPreview,
       suggestedFilesResult.suggestedFiles,
@@ -723,6 +805,7 @@ async function prepareApplyCommand(
       artifact: artifactResult.artifact,
       repoRoot,
       suggestedFiles: suggestedFilesResult.suggestedFiles,
+      baseCommit,
     }
   } catch (error) {
     return {
@@ -779,6 +862,7 @@ export async function runApplyDryRunCommand(
       artifact: prepared.artifact,
       repoRoot: prepared.repoRoot,
       suggestedFiles: prepared.suggestedFiles,
+      baseCommit: prepared.baseCommit,
     }),
     stderr: "",
   }
@@ -817,6 +901,7 @@ export async function runApplyCheckCommand(
       artifact: prepared.artifact,
       repoRoot: prepared.repoRoot,
       suggestedFiles: prepared.suggestedFiles,
+      baseCommit: prepared.baseCommit,
     }),
     stderr: "",
   }
@@ -908,6 +993,7 @@ export async function runApplyConfirmedCommand(
         artifact: prepared.artifact,
         repoRoot: prepared.repoRoot,
         suggestedFiles: prepared.suggestedFiles,
+        baseCommit: prepared.baseCommit,
         branchName,
       }),
       stderr: "",
@@ -941,6 +1027,7 @@ export async function runApplyConfirmedCommand(
       artifact: prepared.artifact,
       repoRoot: prepared.repoRoot,
       suggestedFiles: prepared.suggestedFiles,
+      baseCommit: prepared.baseCommit,
     }),
     stderr: "",
   }

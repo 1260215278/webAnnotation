@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   formatApplyDryRunPlan,
   formatApplyReport,
+  formatBranchCommitReport,
   formatPatchCheckReport,
   formatPatchArtifactPreview,
   runApplyConfirmedCommand,
@@ -47,6 +48,18 @@ function makeArtifact(overrides: Record<string, unknown> = {}): Record<string, u
     },
     ...overrides,
   }
+}
+
+function makeGitDiffArtifact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return makeArtifact({
+    patchProposal: {
+      summary: "Update submit button copy.",
+      suggestedFiles: ["src/App.tsx"],
+      diffPreview:
+        "diff --git a/src/App.tsx b/src/App.tsx\n--- a/src/App.tsx\n+++ b/src/App.tsx\n@@ -1 +1 @@\n- Submit\n+ Save settings",
+    },
+    ...overrides,
+  })
 }
 
 describe("validatePatchArtifactInput", () => {
@@ -447,6 +460,40 @@ describe("formatApplyReport", () => {
   })
 })
 
+describe("formatBranchCommitReport", () => {
+  it("formats a stable branch commit report", () => {
+    const result = validatePatchArtifactInput(makeGitDiffArtifact())
+    if (!result.ok) throw new Error("fixture should be valid")
+
+    expect(
+      formatBranchCommitReport({
+        artifact: result.artifact,
+        repoRoot: "/repo/web-console",
+        suggestedFiles: ["src/App.tsx"],
+        branchName: "webannotation/task-example",
+      }),
+    ).toBe(
+      [
+        "Patch branch commit report",
+        "Task: task_example [patch_accepted]",
+        "Repo root: /repo/web-console",
+        "Branch: webannotation/task-example",
+        "Committed files:",
+        "- src/App.tsx",
+        "Review: accepted",
+        "Patch check: passed",
+        "Patch apply: applied",
+        "Git add: staged selected files",
+        "Git commit: created",
+        "Safety:",
+        "- push: false",
+        "- createsPr: false",
+        "",
+      ].join("\n"),
+    )
+  })
+})
+
 describe("runApplyConfirmedCommand", () => {
   it("applies a valid artifact after check succeeds", async () => {
     const calls: string[] = []
@@ -586,6 +633,240 @@ describe("runApplyConfirmedCommand", () => {
       stderr: "Patch apply failed: apply failed\n",
     })
   })
+
+  it("rejects commit mode without a branch", async () => {
+    const result = await runApplyConfirmedCommand(
+      ["apply", "--file", "artifact.json", "--yes", "--commit", "--message", "Update copy"],
+      {
+        readFile: async () => JSON.stringify(makeGitDiffArtifact()),
+        getRepoRoot: async () => "/repo/web-console",
+        getGitStatus: async () => "",
+        checkPatch: async () => undefined,
+        applyPatch: async () => undefined,
+      },
+    )
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr:
+        "Usage: web-annotation apply --file <artifact.json> --yes --branch <branch-name> --commit --message <commit-message>\n",
+    })
+  })
+
+  it("rejects commit mode without a message", async () => {
+    const result = await runApplyConfirmedCommand(
+      ["apply", "--file", "artifact.json", "--yes", "--branch", "webannotation/task-example", "--commit"],
+      {
+        readFile: async () => JSON.stringify(makeGitDiffArtifact()),
+        getRepoRoot: async () => "/repo/web-console",
+        getGitStatus: async () => "",
+        checkPatch: async () => undefined,
+        applyPatch: async () => undefined,
+      },
+    )
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr:
+        "Usage: web-annotation apply --file <artifact.json> --yes --branch <branch-name> --commit --message <commit-message>\n",
+    })
+  })
+
+  it("rejects invalid branch names before checking or applying", async () => {
+    const calls: string[] = []
+    const result = await runApplyConfirmedCommand(
+      [
+        "apply",
+        "--file",
+        "artifact.json",
+        "--yes",
+        "--branch",
+        "bad branch",
+        "--commit",
+        "--message",
+        "Update copy",
+      ],
+      {
+        readFile: async () => JSON.stringify(makeGitDiffArtifact()),
+        getRepoRoot: async () => {
+          calls.push("getRepoRoot")
+          return "/repo/web-console"
+        },
+        getGitStatus: async () => {
+          calls.push("getGitStatus")
+          return ""
+        },
+        checkPatch: async () => {
+          calls.push("checkPatch")
+        },
+        applyPatch: async () => {
+          calls.push("applyPatch")
+        },
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Invalid branch name:")
+    expect(calls).toEqual([])
+  })
+
+  it("rejects commit messages with AI trailers", async () => {
+    const result = await runApplyConfirmedCommand(
+      [
+        "apply",
+        "--file",
+        "artifact.json",
+        "--yes",
+        "--branch",
+        "webannotation/task-example",
+        "--commit",
+        "--message",
+        "Update copy\n\nCo-Authored-By: Claude <noreply@example.com>",
+      ],
+      {
+        readFile: async () => JSON.stringify(makeGitDiffArtifact()),
+        getRepoRoot: async () => "/repo/web-console",
+        getGitStatus: async () => "",
+        checkPatch: async () => undefined,
+        applyPatch: async () => undefined,
+      },
+    )
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "Invalid commit message: message must not contain AI signature trailers\n",
+    })
+  })
+
+  it("rejects commit mode when diff files do not match suggested files", async () => {
+    const calls: string[] = []
+    const result = await runApplyConfirmedCommand(
+      [
+        "apply",
+        "--file",
+        "artifact.json",
+        "--yes",
+        "--branch",
+        "webannotation/task-example",
+        "--commit",
+        "--message",
+        "Update copy",
+      ],
+      {
+        readFile: async () =>
+          JSON.stringify(
+            makeGitDiffArtifact({
+              patchProposal: {
+                summary: "Update copy",
+                suggestedFiles: ["src/App.tsx"],
+                diffPreview:
+                  "diff --git a/src/Other.tsx b/src/Other.tsx\n--- a/src/Other.tsx\n+++ b/src/Other.tsx\n@@ -1 +1 @@\n-old\n+new",
+              },
+            }),
+          ),
+        getRepoRoot: async () => {
+          calls.push("getRepoRoot")
+          return "/repo/web-console"
+        },
+        getGitStatus: async () => {
+          calls.push("getGitStatus")
+          return ""
+        },
+        checkPatch: async () => {
+          calls.push("checkPatch")
+        },
+        applyPatch: async () => {
+          calls.push("applyPatch")
+        },
+        checkBranchName: async () => {
+          calls.push("checkBranchName")
+        },
+        createBranch: async () => {
+          calls.push("createBranch")
+        },
+        stageFiles: async () => {
+          calls.push("stageFiles")
+        },
+        commitChanges: async () => {
+          calls.push("commitChanges")
+        },
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Patch diff files must match suggested files:")
+    expect(calls).toEqual(["getRepoRoot", "getGitStatus"])
+  })
+
+  it("creates a branch, applies, stages selected files, and commits in commit mode", async () => {
+    const calls: string[] = []
+    const result = await runApplyConfirmedCommand(
+      [
+        "apply",
+        "--file",
+        "artifact.json",
+        "--yes",
+        "--branch",
+        "webannotation/task-example",
+        "--commit",
+        "--message",
+        "Update copy",
+      ],
+      {
+        readFile: async () => JSON.stringify(makeGitDiffArtifact()),
+        getRepoRoot: async () => {
+          calls.push("getRepoRoot")
+          return "/repo/web-console"
+        },
+        getGitStatus: async () => {
+          calls.push("getGitStatus")
+          return ""
+        },
+        checkPatch: async (diffPreview) => {
+          calls.push(`checkPatch:${diffPreview}`)
+        },
+        checkBranchName: async (branchName) => {
+          calls.push(`checkBranchName:${branchName}`)
+        },
+        createBranch: async (branchName) => {
+          calls.push(`createBranch:${branchName}`)
+        },
+        applyPatch: async (diffPreview) => {
+          calls.push(`applyPatch:${diffPreview}`)
+        },
+        stageFiles: async (files) => {
+          calls.push(`stageFiles:${files.join(",")}`)
+        },
+        commitChanges: async (message) => {
+          calls.push(`commitChanges:${message}`)
+        },
+      },
+    )
+
+    const diffPreview =
+      "diff --git a/src/App.tsx b/src/App.tsx\n--- a/src/App.tsx\n+++ b/src/App.tsx\n@@ -1 +1 @@\n- Submit\n+ Save settings"
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Patch branch commit report")
+    expect(result.stdout).toContain("Branch: webannotation/task-example")
+    expect(result.stdout).toContain("Git add: staged selected files")
+    expect(result.stdout).toContain("Git commit: created")
+    expect(result.stdout).toContain("- push: false")
+    expect(result.stdout).toContain("- createsPr: false")
+    expect(calls).toEqual([
+      "getRepoRoot",
+      "getGitStatus",
+      `checkPatch:${diffPreview}`,
+      "checkBranchName:webannotation/task-example",
+      "createBranch:webannotation/task-example",
+      `applyPatch:${diffPreview}`,
+      "stageFiles:src/App.tsx",
+      "commitChanges:Update copy",
+    ])
+  })
 })
 
 describe("runCliCommand", () => {
@@ -606,6 +887,36 @@ describe("runCliCommand", () => {
     expect((await runCliCommand(["apply", "--file", "artifact.json", "--yes"], deps)).code).toBe(0)
   })
 
+  it("dispatches branch commit apply commands", async () => {
+    const result = await runCliCommand(
+      [
+        "apply",
+        "--file",
+        "artifact.json",
+        "--yes",
+        "--branch",
+        "webannotation/task-example",
+        "--commit",
+        "--message",
+        "Update copy",
+      ],
+      {
+        readFile: async () => JSON.stringify(makeGitDiffArtifact()),
+        getRepoRoot: async () => "/repo/web-console",
+        getGitStatus: async () => "",
+        checkPatch: async () => undefined,
+        checkBranchName: async () => undefined,
+        createBranch: async () => undefined,
+        applyPatch: async () => undefined,
+        stageFiles: async () => undefined,
+        commitChanges: async () => undefined,
+      },
+    )
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("Patch branch commit report")
+  })
+
   it("rejects bare apply with the confirmed-apply hint", async () => {
     const result = await runCliCommand(["apply", "--file", "artifact.json"], {
       readFile: async () => JSON.stringify(makeArtifact()),
@@ -621,5 +932,115 @@ describe("runCliCommand", () => {
       stderr:
         "Usage: web-annotation apply --file <artifact.json> --yes\nRun --dry-run or --check before confirmed apply.\n",
     })
+  })
+})
+
+describe("diff target safety (mixed diff bypass)", () => {
+  // suggestedFiles claims only src/App.tsx, but the diff also carries a plain
+  // unified-diff section (no `diff --git` header) that targets src/Other.tsx.
+  // `git apply` would touch both files, so every apply path must reject it
+  // before checking, applying, branching, or committing.
+  const MIXED_DIFF = [
+    "diff --git a/src/App.tsx b/src/App.tsx",
+    "--- a/src/App.tsx",
+    "+++ b/src/App.tsx",
+    "@@ -1 +1 @@",
+    "- Submit",
+    "+ Save settings",
+    "--- a/src/Other.tsx",
+    "+++ b/src/Other.tsx",
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+  ].join("\n")
+
+  function makeMixedArtifact(): Record<string, unknown> {
+    return makeArtifact({
+      patchProposal: {
+        summary: "Sneak in an undeclared file.",
+        suggestedFiles: ["src/App.tsx"],
+        diffPreview: MIXED_DIFF,
+      },
+    })
+  }
+
+  it("rejects a mixed diff in check mode before running git apply --check", async () => {
+    const calls: string[] = []
+    const result = await runApplyCheckCommand(["apply", "--file", "artifact.json", "--check"], {
+      readFile: async () => JSON.stringify(makeMixedArtifact()),
+      getRepoRoot: async () => "/repo/web-console",
+      getGitStatus: async () => "",
+      checkPatch: async () => {
+        calls.push("checkPatch")
+      },
+    })
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Patch diff files must match suggested files:")
+    expect(result.stderr).toContain("src/Other.tsx")
+    expect(calls).toEqual([])
+  })
+
+  it("rejects a mixed diff in confirmed apply mode before checking or applying", async () => {
+    const calls: string[] = []
+    const result = await runApplyConfirmedCommand(["apply", "--file", "artifact.json", "--yes"], {
+      readFile: async () => JSON.stringify(makeMixedArtifact()),
+      getRepoRoot: async () => "/repo/web-console",
+      getGitStatus: async () => "",
+      checkPatch: async () => {
+        calls.push("checkPatch")
+      },
+      applyPatch: async () => {
+        calls.push("applyPatch")
+      },
+    })
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Patch diff files must match suggested files:")
+    expect(calls).toEqual([])
+  })
+
+  it("rejects a mixed diff in branch commit mode before any git write", async () => {
+    const calls: string[] = []
+    const result = await runApplyConfirmedCommand(
+      [
+        "apply",
+        "--file",
+        "artifact.json",
+        "--yes",
+        "--branch",
+        "webannotation/task-example",
+        "--commit",
+        "--message",
+        "Update copy",
+      ],
+      {
+        readFile: async () => JSON.stringify(makeMixedArtifact()),
+        getRepoRoot: async () => "/repo/web-console",
+        getGitStatus: async () => "",
+        checkPatch: async () => {
+          calls.push("checkPatch")
+        },
+        checkBranchName: async () => {
+          calls.push("checkBranchName")
+        },
+        createBranch: async () => {
+          calls.push("createBranch")
+        },
+        applyPatch: async () => {
+          calls.push("applyPatch")
+        },
+        stageFiles: async () => {
+          calls.push("stageFiles")
+        },
+        commitChanges: async () => {
+          calls.push("commitChanges")
+        },
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Patch diff files must match suggested files:")
+    expect(calls).toEqual([])
   })
 })

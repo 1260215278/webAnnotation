@@ -68,7 +68,7 @@ Still planned:
 - Vue SFC source metadata injection.
 - Model-specific provider adapters and a production-grade task-console workflow.
 - Persistent storage for the platform.
-- CLI branch/commit and PR/MR delivery (the CLI currently previews artifacts, runs apply dry-run/preflight, checks patch applicability, and can apply to the working tree with explicit confirmation).
+- CLI push and PR/MR delivery (the CLI currently previews artifacts, runs apply dry-run/preflight, checks patch applicability, applies to the working tree with explicit confirmation, and can apply on a new local branch with a local commit).
 - npm publishing.
 
 ## Install Locally
@@ -334,9 +334,9 @@ const { server, store } = createPlatformServer({
 server.listen(4319)
 ```
 
-## CLI Preview, Dry-run, Check, And Apply
+## CLI Preview, Dry-run, Check, Apply, And Branch Commit
 
-`packages/annotation-cli` (`@web-annotation/cli`, bin `web-annotation`) is a minimal local CLI for previewing the `web-annotation.patch-artifact.v1` JSON artifact exported by the Platform Starter's `GET /api/tasks/:id/patch-artifact`, plus apply dry-run/preflight, patch-check, and confirmed apply commands. It reads a local artifact file only and never creates a commit/branch/PR.
+`packages/annotation-cli` (`@web-annotation/cli`, bin `web-annotation`) is a minimal local CLI for previewing the `web-annotation.patch-artifact.v1` JSON artifact exported by the Platform Starter's `GET /api/tasks/:id/patch-artifact`, plus apply dry-run/preflight, patch-check, confirmed apply, and an explicit local branch/commit command. It reads a local artifact file only and never pushes or opens a PR/MR.
 
 ```sh
 # build the CLI, then preview a saved artifact
@@ -351,6 +351,10 @@ node packages/annotation-cli/dist/main.js apply --file ./artifact.json --check
 
 # apply the patch to the current working tree after explicit confirmation
 node packages/annotation-cli/dist/main.js apply --file ./artifact.json --yes
+
+# apply on a new local branch and create a local commit (no push, no PR)
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --yes \
+  --branch webannotation/task-example --commit --message "Apply reviewed patch"
 ```
 
 `preview --file <artifact.json>` validates the minimal artifact shape before printing:
@@ -364,11 +368,15 @@ On success it exits `0` and prints a deterministic preview: task id and status, 
 
 `apply --file <artifact.json> --dry-run` reuses the same artifact validation, then runs a read-only git preflight: it checks the current directory is inside a git repository, reads the repo root, and requires `git status --short` to be empty. It also validates every `patchProposal.suggestedFiles` entry as a repo-relative path, rejecting empty paths, absolute paths, and `..` traversal. A successful dry-run prints the repo root, suggested files, review status, safety flags (`appliesPatch: false`, `writesFiles: false`, `createsCommit: false`), and the `diffPreview` as preview text only.
 
-`apply --file <artifact.json> --check` reuses the same validation and preflight, then sends `patchProposal.diffPreview` to `git apply --check`. A passing check prints the repo root, suggested files, review status, `Patch check: passed`, and the same no-write safety flags. A failing check exits non-zero with the `git apply --check` error. This command still does not write files or update git state.
+`apply --file <artifact.json> --check` reuses the same validation and preflight, enforces the diff-target safety check described below, then sends `patchProposal.diffPreview` to `git apply --check`. A passing check prints the repo root, suggested files, review status, `Patch check: passed`, and the same no-write safety flags. A failing check exits non-zero with the `git apply --check` error. This command still does not write files or update git state.
 
-`apply --file <artifact.json> --yes` is the first command that writes to the current working tree. It requires a clean git repository, validates paths, runs `git apply --check`, and then runs `git apply`. It does not run `git add`, create a branch, create a commit, push, or open a PR/MR. Use `--dry-run` or `--check` first when reviewing an artifact manually.
+`apply --file <artifact.json> --yes` (without `--commit`) is the first command that writes to the current working tree. It requires a clean git repository, validates paths, enforces the diff-target safety check, runs `git apply --check`, and then runs `git apply`. It does not run `git add`, create a branch, create a commit, push, or open a PR/MR. Use `--dry-run` or `--check` first when reviewing an artifact manually.
 
-The core logic is exposed as pure functions for embedding and testing: `validatePatchArtifactInput(input)`, `formatPatchArtifactPreview(artifact)`, `formatApplyDryRunPlan(input)`, `formatPatchCheckReport(input)`, `formatApplyReport(input)`, `runPreviewCommand(args, deps)`, `runApplyDryRunCommand(args, deps)`, `runApplyCheckCommand(args, deps)`, `runApplyConfirmedCommand(args, deps)`, and `runCliCommand(args, deps)`. `src/main.ts` only adapts `process.argv`/`stdout`/`stderr`, two read-only git commands (`rev-parse --show-toplevel`, `status --short`), the no-write `git apply --check`, and confirmed `git apply` for `--yes`. Remote `--url` fetching, branch/commit creation, and PR/MR delivery remain planned.
+Diff-target safety check: before any `git apply --check` or `git apply`, every apply command (`--check`, `--yes`, and `--commit`) enumerates the files the diff would actually touch and requires that set to equal the normalized `suggestedFiles`. `git apply` honours both `diff --git a/… b/…` extended headers and plain unified-diff `---`/`+++` file headers, so the check parses all of them (hunk bodies are skipped via exact line counts to avoid misreading content lines) and rejects any diff that targets a file outside `suggestedFiles`. This prevents an artifact from declaring one file while smuggling edits to another.
+
+`apply --file <artifact.json> --yes --branch <branch-name> --commit --message <commit-message>` extends confirmed apply into an explicit local branch + commit. `--commit` requires both `--branch` and `--message`; omitting either exits non-zero. The branch name is rejected when it is empty, padded or contains whitespace, starts with `-`, or contains `..` or a backslash, and `src/main.ts` also runs `git check-ref-format --branch` as a final guard. The `--message` is taken verbatim and is rejected when it contains a `Co-Authored-By` or `Generated with` AI-signature trailer; the CLI never invents a default message. Before any write it reuses artifact validation, suggested-file path safety, the clean-repo preflight, the diff-target safety check (covering both `diff --git` and plain `---`/`+++` headers), and `git apply --check`, so an unexpected file is never applied or committed. The git write operations are limited to `git switch -c <branch>`, `git apply`, `git add -- <suggested files>`, and `git commit -m <message>`; it never runs `git push`, `git pull`, `git checkout`, `git reset`, or any PR/MR command. On success it prints a deterministic branch/commit report including the branch name, committed files, `Patch check: passed`, `Patch apply: applied`, `Git add: staged selected files`, `Git commit: created`, and the explicit `push: false` / `createsPr: false` safety flags.
+
+The core logic is exposed as pure functions for embedding and testing: `validatePatchArtifactInput(input)`, `formatPatchArtifactPreview(artifact)`, `formatApplyDryRunPlan(input)`, `formatPatchCheckReport(input)`, `formatApplyReport(input)`, `formatBranchCommitReport(input)`, `runPreviewCommand(args, deps)`, `runApplyDryRunCommand(args, deps)`, `runApplyCheckCommand(args, deps)`, `runApplyConfirmedCommand(args, deps)`, and `runCliCommand(args, deps)`. `src/main.ts` only adapts `process.argv`/`stdout`/`stderr`, two read-only git commands (`rev-parse --show-toplevel`, `status --short`), the no-write `git apply --check`, confirmed `git apply` for `--yes`, and the `git check-ref-format` / `git switch -c` / `git add` / `git commit` writes for `--commit`. Remote `--url` fetching, push, and PR/MR delivery remain planned.
 
 ## Payload Shape
 
@@ -435,7 +443,7 @@ packages/
   annotation-core/       Runtime SDK for browser annotation
   annotation-vite/       Current Vite plugin for React source metadata
   annotation-node/       Current Node protocol kit: validation, source resolution, prompt context
-  annotation-cli/        Current local CLI: previews artifacts, runs dry-run/check, and applies patches with explicit --yes (branch/commit/PR still planned)
+  annotation-cli/        Current local CLI: previews artifacts, runs dry-run/check, applies with explicit --yes, and can branch + local-commit (push/PR still planned)
 
 apps/
   platform-starter/      Current minimal HTTP ingest API + bilingual static task console

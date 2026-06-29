@@ -11,6 +11,10 @@ async function readGit(args: string[]): Promise<string> {
   return String(result.stdout).trimEnd()
 }
 
+async function execGit(args: string[]): Promise<void> {
+  await execFileAsync("git", args, { encoding: "utf8" })
+}
+
 async function checkPatch(diffPreview: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn("git", ["apply", "--check"], {
@@ -60,7 +64,11 @@ void runCliCommand(process.argv.slice(2), {
   getRepoRoot: () => readGit(["rev-parse", "--show-toplevel"]),
   getGitStatus: () => readGit(["status", "--short"]),
   checkPatch,
+  checkBranchName: (branchName) => readGit(["check-ref-format", "--branch", branchName]).then(() => undefined),
+  createBranch: (branchName) => execGit(["switch", "-c", branchName]),
   applyPatch,
+  stageFiles: (files) => execGit(["add", "--", ...files]),
+  commitChanges: (message) => execGit(["commit", "-m", message]),
 }).then((result) => {
   if (result.stdout) process.stdout.write(result.stdout)
   if (result.stderr) process.stderr.write(result.stderr)

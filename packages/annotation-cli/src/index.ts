@@ -53,6 +53,10 @@ export interface ApplyCheckCommandDependencies extends ApplyDryRunCommandDepende
   checkPatch: (diffPreview: string) => Promise<void>
 }
 
+export interface ApplyConfirmedCommandDependencies extends ApplyCheckCommandDependencies {
+  applyPatch: (diffPreview: string) => Promise<void>
+}
+
 export interface PreviewCommandResult {
   code: number
   stdout: string
@@ -66,6 +70,7 @@ export interface ApplyDryRunPlanInput {
 }
 
 export type PatchCheckReportInput = ApplyDryRunPlanInput
+export type ApplyReportInput = ApplyDryRunPlanInput
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -234,6 +239,26 @@ export function formatPatchCheckReport(input: PatchCheckReportInput): string {
   ].join("\n")
 }
 
+export function formatApplyReport(input: ApplyReportInput): string {
+  const suggestedFiles =
+    input.suggestedFiles.length === 0
+      ? ["- (none)"]
+      : input.suggestedFiles.map((file) => `- ${file}`)
+  return [
+    "Patch apply report",
+    `Task: ${input.artifact.taskId} [${input.artifact.taskStatus}]`,
+    `Repo root: ${input.repoRoot}`,
+    "Applied files:",
+    ...suggestedFiles,
+    `Review: ${input.artifact.patchReview?.status ?? "unreviewed"}`,
+    "Patch check: passed",
+    "Patch apply: applied",
+    "Safety:",
+    "- createsCommit: false",
+    "",
+  ].join("\n")
+}
+
 function previewUsage(): string {
   return "Usage: web-annotation preview --file <artifact.json>\n"
 }
@@ -246,11 +271,20 @@ function applyCheckUsage(): string {
   return "Usage: web-annotation apply --file <artifact.json> --check\n"
 }
 
+function applyConfirmedUsage(): string {
+  return [
+    "Usage: web-annotation apply --file <artifact.json> --yes",
+    "Run --dry-run or --check before confirmed apply.",
+    "",
+  ].join("\n")
+}
+
 function cliUsage(): string {
   return [
     previewUsage().trimEnd(),
     applyDryRunUsage().trimEnd(),
     applyCheckUsage().trimEnd(),
+    applyConfirmedUsage().trimEnd(),
     "",
   ].join("\n")
 }
@@ -485,12 +519,58 @@ export async function runApplyCheckCommand(
   }
 }
 
+export async function runApplyConfirmedCommand(
+  args: string[],
+  deps: ApplyConfirmedCommandDependencies,
+): Promise<PreviewCommandResult> {
+  if (args[0] !== "apply" || !args.includes("--yes")) {
+    return { code: 1, stdout: "", stderr: applyConfirmedUsage() }
+  }
+  const file = getFileArg(args)
+  if (!file) {
+    return { code: 1, stdout: "", stderr: applyConfirmedUsage() }
+  }
+
+  const prepared = await prepareApplyCommand(
+    file,
+    deps,
+    "Git preflight failed: working tree must be clean before confirmed apply\n",
+  )
+  if (!prepared.ok) {
+    return prepared.result
+  }
+
+  try {
+    await deps.checkPatch(prepared.artifact.patchProposal.diffPreview)
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `Patch check failed: ${errorMessage(error)}\n` }
+  }
+
+  try {
+    await deps.applyPatch(prepared.artifact.patchProposal.diffPreview)
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `Patch apply failed: ${errorMessage(error)}\n` }
+  }
+
+  return {
+    code: 0,
+    stdout: formatApplyReport({
+      artifact: prepared.artifact,
+      repoRoot: prepared.repoRoot,
+      suggestedFiles: prepared.suggestedFiles,
+    }),
+    stderr: "",
+  }
+}
+
 export function runCliCommand(
   args: string[],
-  deps: ApplyCheckCommandDependencies,
+  deps: ApplyConfirmedCommandDependencies,
 ): Promise<PreviewCommandResult> {
   if (args[0] === "preview") return runPreviewCommand(args, deps)
+  if (args[0] === "apply" && args.includes("--yes")) return runApplyConfirmedCommand(args, deps)
   if (args[0] === "apply" && args.includes("--check")) return runApplyCheckCommand(args, deps)
-  if (args[0] === "apply") return runApplyDryRunCommand(args, deps)
+  if (args[0] === "apply" && args.includes("--dry-run")) return runApplyDryRunCommand(args, deps)
+  if (args[0] === "apply") return runApplyConfirmedCommand(args, deps)
   return Promise.resolve({ code: 1, stdout: "", stderr: cliUsage() })
 }

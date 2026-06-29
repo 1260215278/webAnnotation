@@ -68,7 +68,7 @@ Still planned:
 - Vue SFC source metadata injection.
 - Model-specific provider adapters and a production-grade task-console workflow.
 - Persistent storage for the platform.
-- CLI patch apply, branch/commit, and PR/MR delivery (the CLI currently previews artifacts, runs apply dry-run/preflight, and checks patch applicability without writing files).
+- CLI branch/commit and PR/MR delivery (the CLI currently previews artifacts, runs apply dry-run/preflight, checks patch applicability, and can apply to the working tree with explicit confirmation).
 - npm publishing.
 
 ## Install Locally
@@ -334,9 +334,9 @@ const { server, store } = createPlatformServer({
 server.listen(4319)
 ```
 
-## CLI Preview, Dry-run, And Check
+## CLI Preview, Dry-run, Check, And Apply
 
-`packages/annotation-cli` (`@web-annotation/cli`, bin `web-annotation`) is a minimal local CLI for previewing the `web-annotation.patch-artifact.v1` JSON artifact exported by the Platform Starter's `GET /api/tasks/:id/patch-artifact`, plus apply dry-run/preflight and patch-check commands. It reads a local artifact file only: it does not apply the patch, write any repository file, or create a commit/branch/PR.
+`packages/annotation-cli` (`@web-annotation/cli`, bin `web-annotation`) is a minimal local CLI for previewing the `web-annotation.patch-artifact.v1` JSON artifact exported by the Platform Starter's `GET /api/tasks/:id/patch-artifact`, plus apply dry-run/preflight, patch-check, and confirmed apply commands. It reads a local artifact file only and never creates a commit/branch/PR.
 
 ```sh
 # build the CLI, then preview a saved artifact
@@ -348,6 +348,9 @@ node packages/annotation-cli/dist/main.js apply --file ./artifact.json --dry-run
 
 # verify the diff preview with git apply --check, still without writing files
 node packages/annotation-cli/dist/main.js apply --file ./artifact.json --check
+
+# apply the patch to the current working tree after explicit confirmation
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --yes
 ```
 
 `preview --file <artifact.json>` validates the minimal artifact shape before printing:
@@ -363,7 +366,9 @@ On success it exits `0` and prints a deterministic preview: task id and status, 
 
 `apply --file <artifact.json> --check` reuses the same validation and preflight, then sends `patchProposal.diffPreview` to `git apply --check`. A passing check prints the repo root, suggested files, review status, `Patch check: passed`, and the same no-write safety flags. A failing check exits non-zero with the `git apply --check` error. This command still does not write files or update git state.
 
-The core logic is exposed as pure functions for embedding and testing: `validatePatchArtifactInput(input)`, `formatPatchArtifactPreview(artifact)`, `formatApplyDryRunPlan(input)`, `formatPatchCheckReport(input)`, `runPreviewCommand(args, deps)`, `runApplyDryRunCommand(args, deps)`, `runApplyCheckCommand(args, deps)`, and `runCliCommand(args, deps)`. `src/main.ts` only adapts `process.argv`/`stdout`/`stderr`, two read-only git commands (`rev-parse --show-toplevel`, `status --short`), and the no-write `git apply --check`. Remote `--url` fetching, real patch apply, branch/commit creation, and PR/MR delivery remain planned.
+`apply --file <artifact.json> --yes` is the first command that writes to the current working tree. It requires a clean git repository, validates paths, runs `git apply --check`, and then runs `git apply`. It does not run `git add`, create a branch, create a commit, push, or open a PR/MR. Use `--dry-run` or `--check` first when reviewing an artifact manually.
+
+The core logic is exposed as pure functions for embedding and testing: `validatePatchArtifactInput(input)`, `formatPatchArtifactPreview(artifact)`, `formatApplyDryRunPlan(input)`, `formatPatchCheckReport(input)`, `formatApplyReport(input)`, `runPreviewCommand(args, deps)`, `runApplyDryRunCommand(args, deps)`, `runApplyCheckCommand(args, deps)`, `runApplyConfirmedCommand(args, deps)`, and `runCliCommand(args, deps)`. `src/main.ts` only adapts `process.argv`/`stdout`/`stderr`, two read-only git commands (`rev-parse --show-toplevel`, `status --short`), the no-write `git apply --check`, and confirmed `git apply` for `--yes`. Remote `--url` fetching, branch/commit creation, and PR/MR delivery remain planned.
 
 ## Payload Shape
 
@@ -430,7 +435,7 @@ packages/
   annotation-core/       Runtime SDK for browser annotation
   annotation-vite/       Current Vite plugin for React source metadata
   annotation-node/       Current Node protocol kit: validation, source resolution, prompt context
-  annotation-cli/        Current local CLI: previews artifacts, runs apply dry-run/preflight, and checks patches without writing files (real apply/Git/PR still planned)
+  annotation-cli/        Current local CLI: previews artifacts, runs dry-run/check, and applies patches with explicit --yes (branch/commit/PR still planned)
 
 apps/
   platform-starter/      Current minimal HTTP ingest API + bilingual static task console

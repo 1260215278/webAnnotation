@@ -246,6 +246,23 @@ const { files, issues } = collectRepoSourceContext(context, {
 
 Safety is enforced: only relative paths from the context are accepted; absolute paths, empty paths, and `..` traversal that escapes `rootDir` are rejected; the same file is read once; missing, oversized, or binary files (null-byte detection) become `issues` instead of throwing; and the returned `file` is always repository-relative — absolute paths are used only for internal reads, never surfaced to prompt-facing content. For tests, `readFile`/`fileExists` can be injected.
 
+To keep an AI/custom provider's `diffPreview` from secretly editing files outside what it declared, the kit ships a unified-diff target safety helper. It runs no git, applies no patch, and reads no repository files:
+
+```ts
+import {
+  collectUnifiedDiffTargetFiles,
+  validateUnifiedDiffTargetFiles,
+} from "@web-annotation/node"
+
+// Enumerate the repository files a diff would touch (sorted, unique).
+collectUnifiedDiffTargetFiles(diff) // => { ok: true, files } | { ok: false, issues }
+
+// Reject any target outside the allow-list (e.g. a proposal's suggestedFiles).
+validateUnifiedDiffTargetFiles(diff, ["src/App.tsx"]) // => { ok, files } | { ok: false, issues }
+```
+
+It parses both `diff --git a/… b/…` extended headers and plain `--- a/…` / `+++ b/…` headers, skips hunk bodies via exact line counts (so content lines such as `--- something` are never misread as file headers), ignores `/dev/null` while keeping the real path of added/deleted files, and rejects absolute paths, `..` traversal, and empty file names with readable `issues`.
+
 ## Platform Starter (Ingest API)
 
 `apps/platform-starter` is a minimal HTTP ingest service built on Node's built-in `http` and the Node protocol kit. It receives payloads, validates them, resolves safe-mode sources, collects source snippets from a configured local repo, calls an optional host-provided patch provider, and stores tasks in memory. It ships no built-in model provider and uses no database.
@@ -286,14 +303,14 @@ Endpoints:
 - `GET /api/tasks` → `{ tasks: TaskSummary[] }`.
 - `GET /api/tasks/:id` → `{ task }`, or `404` when the id is unknown.
 - `POST /api/tasks/:id/source-context` → collect repo snippets for the task using the configured repo root. Returns `201 { taskId, sourceContext }` on first collection and `200` on repeat calls, refreshing the stored source context each time; `409 { error }` when `repoRoot` is not configured; `404` when the id is unknown.
-- `POST /api/tasks/:id/patch` → call `patchProvider.generatePatch({ task, promptContext, sourceContext })`. Returns `201 { taskId, status, patchProposal }` on first success and `200` with the same proposal on repeats; `409 { error }` when no provider is configured; `502 { error, message }` when the provider fails; `404` when the id is unknown.
+- `POST /api/tasks/:id/patch` → call `patchProvider.generatePatch({ task, promptContext, sourceContext })`. Returns `201 { taskId, status, patchProposal }` on first success and `200` with the same proposal on repeats; `409 { error }` when no provider is configured; `502 { error, message }` when the provider fails; `404` when the id is unknown. Before storing, the provider's `diffPreview` is checked with the Node kit's `validateUnifiedDiffTargetFiles` against its `suggestedFiles`; a diff that touches an undeclared file, an absolute path, or `..` traversal is rejected with `422 { error: "patch provider returned an unsafe diff", issues }` and no proposal is saved.
 - `POST /api/tasks/:id/mock-patch` → generate a mock patch proposal. Returns `201 { taskId, status, patchProposal }` on first call and `200` with the same proposal on repeats (idempotent); `404` when the id is unknown.
 - `POST /api/tasks/:id/patch-review` → body `{ decision: "accept" | "reject" | "changes_requested", reviewer?, note? }`. Records the decision as `patchReview` and moves the task to `patch_accepted` / `patch_rejected` / `changes_requested`. Returns `200 { taskId, status, patchReview }`; `404` when the id is unknown; `409 { error }` when the task has no patch proposal; `400 { error }` for an invalid or missing decision. A repeat review overrides the previous decision (the latest decision wins).
 - `GET /api/tasks/:id/patch-artifact` → export `{ artifact }` with `version: "web-annotation.patch-artifact.v1"`, task metadata, prompt annotations, optional source context, `patchProposal`, optional `patchReview`, and safety flags `{ appliesPatch: false, writesFiles: false, requiresHumanReview: true }`. Returns `404` when the id is unknown and `409 { error }` when the task has no patch proposal. Repeat calls regenerate `exportedAt` while reading the stored proposal/review/task data.
 
 A task summary includes `sourceContextStatus`, `sourceFileCount`, and `sourceIssueCount`. `sourceContext.files[].file` stays repository-relative; absolute paths are not returned. Source-context collection reads files only through the Node kit safety checks and still performs no AI call, diff generation, repository write, or Git operation.
 
-A task moves through `received → patch_proposed → patch_accepted | patch_rejected | changes_requested`. The `patchProposal` carries `summary`, `suggestedFiles`, `diffPreview`, `promptContext`, and optional provider `metadata`. The built-in mock path is deterministic and reads no files; the provider path receives `promptContext` and any collected `sourceContext`, but the starter package itself still does not include model keys, model SDKs, repository writes, or Git operations. A `patchReview` (`status`, `decidedAt`, optional `reviewer`/`note`) records the human decision only. A patch artifact packages task/proposal/review/source-context data for future apply flows, and its safety flags explicitly state that this starter does not apply patches or write files.
+A task moves through `received → patch_proposed → patch_accepted | patch_rejected | changes_requested`. The `patchProposal` carries `summary`, `suggestedFiles`, `diffPreview`, `promptContext`, and optional provider `metadata`. The built-in mock path is deterministic and reads no files; the provider path receives `promptContext` and any collected `sourceContext` and has its returned `diffPreview` checked so it can only touch files inside its own `suggestedFiles` (unsafe diffs are rejected and never stored), but the starter package itself still does not include model keys, model SDKs, repository writes, or Git operations. A `patchReview` (`status`, `decidedAt`, optional `reviewer`/`note`) records the human decision only. A patch artifact packages task/proposal/review/source-context data for future apply flows, and its safety flags explicitly state that this starter does not apply patches or write files.
 
 The HTTP provider adapter sends:
 

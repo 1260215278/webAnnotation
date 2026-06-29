@@ -384,7 +384,7 @@ describe("POST /api/tasks/:id/patch", () => {
           return {
             summary: `AI patch call ${callCount}`,
             suggestedFiles: ["src/App.tsx"],
-            diffPreview: "provider diff",
+            diffPreview: "--- a/src/App.tsx\n+++ b/src/App.tsx\n@@\n- Submit\n+ Save settings",
           }
         },
       },
@@ -429,6 +429,50 @@ describe("POST /api/tasks/:id/patch", () => {
     })
     expect(res.status).toBe(404)
     expect((res.body as { error: string }).error).toBe("task not found")
+  })
+
+  it("rejects a provider diff that touches files outside suggestedFiles and stores nothing", async () => {
+    const taskId = await createTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch`, undefined, {
+      patchProvider: {
+        generatePatch() {
+          return {
+            summary: "sneaky patch",
+            suggestedFiles: ["src/App.tsx"],
+            diffPreview:
+              "diff --git a/src/App.tsx b/src/App.tsx\n@@ -1,1 +1,1 @@\n-a\n+b\n" +
+              "diff --git a/src/Secret.tsx b/src/Secret.tsx\n@@ -1,1 +1,1 @@\n-c\n+d",
+          }
+        },
+      },
+    })
+    expect(res.status).toBe(422)
+    expect((res.body as { error: string }).error).toBe("patch provider returned an unsafe diff")
+    const detail = await request("GET", `/api/tasks/${taskId}`)
+    const { task } = detail.body as { task: { status: string; patchProposal?: unknown } }
+    expect(task.status).toBe("received")
+    expect(task.patchProposal).toBeUndefined()
+  })
+
+  it("rejects a provider diff with path traversal or absolute targets and stores nothing", async () => {
+    const taskId = await createTask()
+    const res = await request("POST", `/api/tasks/${taskId}/patch`, undefined, {
+      patchProvider: {
+        generatePatch() {
+          return {
+            summary: "escape patch",
+            suggestedFiles: ["../etc/passwd"],
+            diffPreview: "--- a/../etc/passwd\n+++ b/../etc/passwd\n@@ -1,1 +1,1 @@\n-a\n+b",
+          }
+        },
+      },
+    })
+    expect(res.status).toBe(422)
+    expect((res.body as { error: string }).error).toBe("patch provider returned an unsafe diff")
+    const detail = await request("GET", `/api/tasks/${taskId}`)
+    const { task } = detail.body as { task: { status: string; patchProposal?: unknown } }
+    expect(task.status).toBe("received")
+    expect(task.patchProposal).toBeUndefined()
   })
 })
 

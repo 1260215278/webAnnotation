@@ -8,6 +8,7 @@ import {
   collectRepoSourceContext,
   resolvePayloadSources,
   validateSourceManifest,
+  validateUnifiedDiffTargetFiles,
 } from "@web-annotation/node"
 import type { RepoSourceContextOptions } from "@web-annotation/node"
 import { createTaskStore } from "./store"
@@ -250,6 +251,17 @@ async function proposeProviderPatch(
     return {
       status: 502,
       body: { error: "patch provider failed", message: errorMessage(error), id },
+    }
+  }
+
+  // Guard against a provider diff that touches files outside its suggestedFiles
+  // (absolute paths, `..` traversal, or undeclared targets). Unsafe proposals are
+  // rejected with a fixed readable error and never stored.
+  const diffSafety = validateUnifiedDiffTargetFiles(result.diffPreview, result.suggestedFiles)
+  if (!diffSafety.ok) {
+    return {
+      status: 422,
+      body: { error: "patch provider returned an unsafe diff", issues: diffSafety.issues, id },
     }
   }
 

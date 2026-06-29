@@ -16,6 +16,7 @@ The repository currently includes:
 - `apps/platform-starter`: a minimal HTTP ingest API (plus a bilingual static task console) that validates payloads, stores tasks, collects repo source context, and proposes mock patches.
 - `examples/playground`: a minimal Vite page for local verification.
 - `examples/vite-react`: a React + Vite example showing DOM-to-source payloads.
+- `examples/provider-http-mock`: a runnable HTTP patch-provider reference plus an end-to-end smoke test.
 - TypeScript typecheck, unit tests, and build scripts.
 
 The SDK currently supports:
@@ -355,6 +356,19 @@ const { server, store } = createPlatformServer({
 })
 server.listen(4319)
 ```
+
+### Example HTTP Provider And End-To-End Smoke
+
+`examples/provider-http-mock` (`@web-annotation/example-provider-http-mock`) is a runnable, dependency-light reference for how a third-party backend connects over the provider protocol. Its `createMockProviderServer()` accepts the request body that `createHttpPatchProvider()` sends — `{ taskId, task, promptContext, sourceContext }` — and replies with a deterministic, valid `PatchProviderResult` (non-empty `summary`, `suggestedFiles`, a unified-diff `diffPreview` scoped to those files, and an object `metadata`). Each annotation targets its real `source.file` when present, otherwise a stable `mock-unmapped/<annotationId>.md` path so the diff still names a valid repository file rather than a CSS selector. A request with no annotations is rejected with HTTP `400` instead of returning an empty, invalid result. It calls no model SDK, makes no outbound network calls, and reads no API keys.
+
+Run it standalone and point the platform at it:
+
+```sh
+pnpm --filter @web-annotation/example-provider-http-mock start   # listens on http://localhost:4400
+WEB_ANNOTATION_PATCH_PROVIDER_URL=http://localhost:4400 pnpm --filter @web-annotation/platform-starter start
+```
+
+The package also ships an end-to-end smoke test (`pnpm --filter @web-annotation/example-provider-http-mock test`) that starts the mock provider on a loopback port, wires it through `createHttpPatchProvider()`, ingests an annotation, calls `POST /api/tasks/:id/patch`, and confirms the resulting proposal passes provider-result validation and diff-target safety and that `GET /api/tasks/:id/patch-artifact` exports a downstream-readable artifact.
 
 ## CLI Pull, Preview, Dry-run, Check, Apply, And Branch Commit
 

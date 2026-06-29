@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "types": ["node"],
+    "paths": {
+      "@web-annotation/core": ["../../packages/annotation-core/src/index.ts"],
+      "@web-annotation/node": ["../../packages/annotation-node/src/index.ts"],
+      "@web-annotation/platform-starter": ["../../apps/platform-starter/src/index.ts"]
+    }
+  },
+  "include": ["src", "test"]
+}

@@ -68,7 +68,7 @@ Still planned:
 - Vue SFC source metadata injection.
 - Model-specific provider adapters and a production-grade task-console workflow.
 - Persistent storage for the platform.
-- CLI patch workflow.
+- CLI patch apply, Git, and PR/MR delivery (the CLI currently only previews exported artifacts).
 - npm publishing.
 
 ## Install Locally
@@ -334,6 +334,27 @@ const { server, store } = createPlatformServer({
 server.listen(4319)
 ```
 
+## CLI Preview
+
+`packages/annotation-cli` (`@web-annotation/cli`, bin `web-annotation`) is a minimal local CLI for previewing the `web-annotation.patch-artifact.v1` JSON artifact exported by the Platform Starter's `GET /api/tasks/:id/patch-artifact`. It reads a local artifact file only: it does not apply the patch, write any repository file, call Git, or create a commit/branch/PR.
+
+```sh
+# build the CLI, then preview a saved artifact
+pnpm --filter @web-annotation/cli build
+node packages/annotation-cli/dist/main.js preview --file ./artifact.json
+```
+
+`preview --file <artifact.json>` validates the minimal artifact shape before printing:
+
+- `version` must equal `web-annotation.patch-artifact.v1`.
+- `taskId` and `taskStatus` must be present.
+- `patchProposal.summary`, `patchProposal.suggestedFiles`, and `patchProposal.diffPreview` must be present.
+- `safety.appliesPatch === false`, `safety.writesFiles === false`, and `safety.requiresHumanReview === true` (the export-only contract).
+
+On success it exits `0` and prints a deterministic preview: task id and status, project id, route, proposal summary, suggested files, review status (`unreviewed` when the artifact has no `patchReview`), and the `diffPreview`. On a missing file, invalid JSON, or any failed validation it prints a readable error to stderr and exits non-zero.
+
+The core logic is exposed as pure functions for embedding and testing: `validatePatchArtifactInput(input)`, `formatPatchArtifactPreview(artifact)`, and `runPreviewCommand(args, deps)`. `src/main.ts` only adapts `process.argv`/`stdout`/`stderr`. Remote `--url` fetching, patch apply, Git, and PR/MR delivery remain planned.
+
 ## Payload Shape
 
 Payload example:
@@ -399,7 +420,7 @@ packages/
   annotation-core/       Runtime SDK for browser annotation
   annotation-vite/       Current Vite plugin for React source metadata
   annotation-node/       Current Node protocol kit: validation, source resolution, prompt context
-  annotation-cli/        Planned local patch pull/apply workflow
+  annotation-cli/        Current local CLI: previews exported patch artifacts (apply/Git/PR still planned)
 
 apps/
   platform-starter/      Current minimal HTTP ingest API + bilingual static task console

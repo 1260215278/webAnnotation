@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process"
-import { readFile } from "node:fs/promises"
+import { readFile, writeFile as fsWriteFile } from "node:fs/promises"
 import { promisify } from "node:util"
 import { runCliCommand } from "./index"
 
@@ -69,6 +69,11 @@ void runCliCommand(process.argv.slice(2), {
   applyPatch,
   stageFiles: (files) => execGit(["add", "--", ...files]),
   commitChanges: (message) => execGit(["commit", "-m", message]),
+  fetchArtifact: async (url, headers) => {
+    const response = await fetch(url, { headers })
+    return { ok: response.ok, status: response.status, text: () => response.text() }
+  },
+  writeFile: (file, content) => fsWriteFile(file, content, "utf8"),
 }).then((result) => {
   if (result.stdout) process.stdout.write(result.stdout)
   if (result.stderr) process.stderr.write(result.stderr)

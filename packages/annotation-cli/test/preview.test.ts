@@ -5,11 +5,13 @@ import {
   formatBranchCommitReport,
   formatPatchCheckReport,
   formatPatchArtifactPreview,
+  formatPullReport,
   runApplyConfirmedCommand,
   runApplyDryRunCommand,
   runApplyCheckCommand,
   runCliCommand,
   runPreviewCommand,
+  runPullCommand,
   validatePatchArtifactInput,
 } from "../src/index"
 
@@ -1042,5 +1044,331 @@ describe("diff target safety (mixed diff bypass)", () => {
     expect(result.code).toBe(1)
     expect(result.stderr).toContain("Patch diff files must match suggested files:")
     expect(calls).toEqual([])
+  })
+})
+
+describe("formatPullReport", () => {
+  it("formats a stable pull report", () => {
+    const result = validatePatchArtifactInput(makeArtifact())
+    if (!result.ok) throw new Error("fixture should be valid")
+
+    expect(formatPullReport({ artifact: result.artifact, outFile: "out/artifact.json" })).toBe(
+      [
+        "Patch artifact pull report",
+        "Task: task_example [patch_accepted]",
+        "Out file: out/artifact.json",
+        "Suggested files:",
+        "- src/App.tsx",
+        "Review: accepted",
+        "Safety:",
+        "- appliesPatch: false",
+        "- writesRepoFiles: false",
+        "- createsCommit: false",
+        "",
+      ].join("\n"),
+    )
+  })
+
+  it("prints unreviewed when patchReview is absent", () => {
+    const result = validatePatchArtifactInput(makeArtifact({ patchReview: undefined }))
+    if (!result.ok) throw new Error("fixture should be valid")
+
+    expect(formatPullReport({ artifact: result.artifact, outFile: "out.json" })).toContain(
+      "Review: unreviewed",
+    )
+  })
+})
+
+describe("runPullCommand", () => {
+  function makePullDeps(overrides: Record<string, unknown> = {}) {
+    return {
+      fetchArtifact: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ artifact: makeArtifact() }),
+      }),
+      writeFile: async () => undefined,
+      ...overrides,
+    }
+  }
+
+  it("fetches, validates, writes, and reports on the success path", async () => {
+    const calls: string[] = []
+    let written: { file: string; content: string } | undefined
+    const result = await runPullCommand(
+      ["pull", "task_example", "--base-url", "http://localhost:4319", "--out", "out/artifact.json"],
+      {
+        fetchArtifact: async (url, headers) => {
+          calls.push(`fetch:${url}`)
+          expect(headers.authorization).toBeUndefined()
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ artifact: makeArtifact() }),
+          }
+        },
+        writeFile: async (file, content) => {
+          written = { file, content }
+        },
+      },
+    )
+
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Patch artifact pull report")
+    expect(result.stdout).toContain("Task: task_example [patch_accepted]")
+    expect(result.stdout).toContain("Out file: out/artifact.json")
+    expect(result.stdout).toContain("- src/App.tsx")
+    expect(result.stdout).toContain("- appliesPatch: false")
+    expect(result.stdout).toContain("- writesRepoFiles: false")
+    expect(result.stdout).toContain("- createsCommit: false")
+    expect(calls).toEqual(["fetch:http://localhost:4319/api/tasks/task_example/patch-artifact"])
+    expect(written?.file).toBe("out/artifact.json")
+    // The written file is the bare artifact so `preview --file` can read it back.
+    expect(JSON.parse(written?.content ?? "{}").version).toBe("web-annotation.patch-artifact.v1")
+  })
+
+  it("sends an Authorization header when --token is provided", async () => {
+    let seenHeaders: Record<string, string> | undefined
+    const result = await runPullCommand(
+      [
+        "pull",
+        "task_example",
+        "--base-url",
+        "https://platform.example.com",
+        "--out",
+        "out.json",
+        "--token",
+        "super-secret-token",
+      ],
+      makePullDeps({
+        fetchArtifact: async (_url: string, headers: Record<string, string>) => {
+          seenHeaders = headers
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ artifact: makeArtifact() }),
+          }
+        },
+      }),
+    )
+
+    expect(result.code).toBe(0)
+    expect(seenHeaders?.authorization).toBe("Bearer super-secret-token")
+  })
+
+  it("requires a task id", async () => {
+    const result = await runPullCommand(
+      ["pull", "--base-url", "http://localhost:4319", "--out", "out.json"],
+      makePullDeps(),
+    )
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Usage: web-annotation pull")
+  })
+
+  it("requires --base-url and --out", async () => {
+    const missingBase = await runPullCommand(["pull", "task_example", "--out", "out.json"], makePullDeps())
+    expect(missingBase.code).toBe(1)
+    expect(missingBase.stderr).toContain("Usage: web-annotation pull")
+
+    const missingOut = await runPullCommand(
+      ["pull", "task_example", "--base-url", "http://localhost:4319"],
+      makePullDeps(),
+    )
+    expect(missingOut.code).toBe(1)
+    expect(missingOut.stderr).toContain("Usage: web-annotation pull")
+  })
+
+  it("rejects non-http(s) base URLs without fetching", async () => {
+    const calls: string[] = []
+    const result = await runPullCommand(
+      ["pull", "task_example", "--base-url", "file:///etc/passwd", "--out", "out.json"],
+      {
+        fetchArtifact: async () => {
+          calls.push("fetch")
+          return { ok: true, status: 200, text: async () => "{}" }
+        },
+        writeFile: async () => {
+          calls.push("writeFile")
+        },
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Invalid base URL")
+    expect(calls).toEqual([])
+  })
+
+  it("rejects a non-2xx response without writing a file", async () => {
+    const calls: string[] = []
+    const result = await runPullCommand(
+      ["pull", "task_example", "--base-url", "http://localhost:4319", "--out", "out.json"],
+      {
+        fetchArtifact: async () => ({ ok: false, status: 404, text: async () => "not found" }),
+        writeFile: async () => {
+          calls.push("writeFile")
+        },
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("HTTP 404")
+    expect(calls).toEqual([])
+  })
+
+  it("rejects invalid JSON without writing a file", async () => {
+    const calls: string[] = []
+    const result = await runPullCommand(
+      ["pull", "task_example", "--base-url", "http://localhost:4319", "--out", "out.json"],
+      {
+        fetchArtifact: async () => ({ ok: true, status: 200, text: async () => "{" }),
+        writeFile: async () => {
+          calls.push("writeFile")
+        },
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("not valid JSON")
+    expect(calls).toEqual([])
+  })
+
+  it("rejects an artifact that fails validation without writing a file", async () => {
+    const calls: string[] = []
+    const result = await runPullCommand(
+      ["pull", "task_example", "--base-url", "http://localhost:4319", "--out", "out.json"],
+      {
+        fetchArtifact: async () => ({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ artifact: makeArtifact({ version: "wrong" }) }),
+        }),
+        writeFile: async () => {
+          calls.push("writeFile")
+        },
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Invalid patch artifact:")
+    expect(calls).toEqual([])
+  })
+
+  it("never leaks the token in error output", async () => {
+    const result = await runPullCommand(
+      [
+        "pull",
+        "task_example",
+        "--base-url",
+        "http://localhost:4319",
+        "--out",
+        "out.json",
+        "--token",
+        "super-secret-token",
+      ],
+      {
+        fetchArtifact: async () => ({ ok: false, status: 500, text: async () => "boom" }),
+        writeFile: async () => undefined,
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stdout).not.toContain("super-secret-token")
+    expect(result.stderr).not.toContain("super-secret-token")
+  })
+
+  it("redacts the token from fetch, response, and write errors", async () => {
+    const args = [
+      "pull",
+      "task_example",
+      "--base-url",
+      "http://localhost:4319",
+      "--out",
+      "out.json",
+      "--token",
+      "super-secret-token",
+    ]
+
+    const fetchFailure = await runPullCommand(args, {
+      fetchArtifact: async () => {
+        throw new Error("network failed for super-secret-token")
+      },
+      writeFile: async () => undefined,
+    })
+    expect(fetchFailure.code).toBe(1)
+    expect(fetchFailure.stderr).toContain("[redacted]")
+    expect(fetchFailure.stderr).not.toContain("super-secret-token")
+
+    const textFailure = await runPullCommand(args, {
+      fetchArtifact: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => {
+          throw new Error("body failed for super-secret-token")
+        },
+      }),
+      writeFile: async () => undefined,
+    })
+    expect(textFailure.code).toBe(1)
+    expect(textFailure.stderr).toContain("[redacted]")
+    expect(textFailure.stderr).not.toContain("super-secret-token")
+
+    const writeFailure = await runPullCommand(args, {
+      fetchArtifact: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ artifact: makeArtifact() }),
+      }),
+      writeFile: async () => {
+        throw new Error("write failed for super-secret-token")
+      },
+    })
+    expect(writeFailure.code).toBe(1)
+    expect(writeFailure.stderr).toContain("[redacted]")
+    expect(writeFailure.stderr).not.toContain("super-secret-token")
+  })
+})
+
+describe("runCliCommand pull dispatch", () => {
+  it("dispatches pull commands when pull dependencies are configured", async () => {
+    let written: string | undefined
+    const result = await runCliCommand(
+      ["pull", "task_example", "--base-url", "http://localhost:4319", "--out", "out.json"],
+      {
+        readFile: async () => JSON.stringify(makeArtifact()),
+        getRepoRoot: async () => "/repo/web-console",
+        getGitStatus: async () => "",
+        checkPatch: async () => undefined,
+        applyPatch: async () => undefined,
+        fetchArtifact: async () => ({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ artifact: makeArtifact() }),
+        }),
+        writeFile: async (_file: string, content: string) => {
+          written = content
+        },
+      },
+    )
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("Patch artifact pull report")
+    expect(JSON.parse(written ?? "{}").taskId).toBe("task_example")
+  })
+
+  it("reports when pull dependencies are not configured", async () => {
+    const result = await runCliCommand(
+      ["pull", "task_example", "--base-url", "http://localhost:4319", "--out", "out.json"],
+      {
+        readFile: async () => JSON.stringify(makeArtifact()),
+        getRepoRoot: async () => "/repo/web-console",
+        getGitStatus: async () => "",
+        checkPatch: async () => undefined,
+        applyPatch: async () => undefined,
+      },
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("Pull dependencies are not configured")
   })
 })

@@ -68,7 +68,7 @@ Still planned:
 - Vue SFC source metadata injection.
 - Model-specific provider adapters and a production-grade task-console workflow.
 - Persistent storage for the platform.
-- CLI push and PR/MR delivery (the CLI currently previews artifacts, runs apply dry-run/preflight, checks patch applicability, applies to the working tree with explicit confirmation, and can apply on a new local branch with a local commit).
+- CLI push and PR/MR delivery (the CLI currently pulls an exported artifact over HTTP, previews artifacts, runs apply dry-run/preflight, checks patch applicability, applies to the working tree with explicit confirmation, and can apply on a new local branch with a local commit).
 - npm publishing.
 
 ## Install Locally
@@ -334,13 +334,17 @@ const { server, store } = createPlatformServer({
 server.listen(4319)
 ```
 
-## CLI Preview, Dry-run, Check, Apply, And Branch Commit
+## CLI Pull, Preview, Dry-run, Check, Apply, And Branch Commit
 
-`packages/annotation-cli` (`@web-annotation/cli`, bin `web-annotation`) is a minimal local CLI for previewing the `web-annotation.patch-artifact.v1` JSON artifact exported by the Platform Starter's `GET /api/tasks/:id/patch-artifact`, plus apply dry-run/preflight, patch-check, confirmed apply, and an explicit local branch/commit command. It reads a local artifact file only and never pushes or opens a PR/MR.
+`packages/annotation-cli` (`@web-annotation/cli`, bin `web-annotation`) is a minimal local CLI for the `web-annotation.patch-artifact.v1` JSON artifact exported by the Platform Starter's `GET /api/tasks/:id/patch-artifact`. It can pull that artifact over HTTP, preview it, run apply dry-run/preflight and patch-check, apply it with explicit confirmation, and create an explicit local branch/commit. It never pushes or opens a PR/MR.
 
 ```sh
-# build the CLI, then preview a saved artifact
+# build the CLI, then pull an exported artifact from a running Platform Starter
 pnpm --filter @web-annotation/cli build
+node packages/annotation-cli/dist/main.js pull <task-id> \
+  --base-url http://localhost:4319 --out ./artifact.json
+
+# preview a saved artifact
 node packages/annotation-cli/dist/main.js preview --file ./artifact.json
 
 # check whether the artifact is safe to plan against the current clean git repo
@@ -356,6 +360,8 @@ node packages/annotation-cli/dist/main.js apply --file ./artifact.json --yes
 node packages/annotation-cli/dist/main.js apply --file ./artifact.json --yes \
   --branch webannotation/task-example --commit --message "Apply reviewed patch"
 ```
+
+`pull <task-id> --base-url <platform-url> --out <artifact.json>` requests `<platform-url>/api/tasks/<task-id>/patch-artifact` and saves the artifact locally. The `--base-url` must be an `http:` or `https:` URL (anything else exits non-zero without making a request). An optional `--token <token>` is sent as `Authorization: Bearer <token>` and never appears in any output, including errors. The response (the platform wraps it as `{ artifact }`) is validated with the same `validatePatchArtifactInput()` used by `preview`; a non-2xx response, invalid JSON, or a failed validation exits non-zero and writes nothing. On success it writes the bare artifact JSON to `--out` (so `preview --file` can read it back) and prints a deterministic pull report: task id and status, out file, suggested files, review status, and the `appliesPatch: false` / `writesRepoFiles: false` / `createsCommit: false` safety flags. `pull` never applies the patch, runs git, creates a branch/commit, pushes, or opens a PR/MR.
 
 `preview --file <artifact.json>` validates the minimal artifact shape before printing:
 
@@ -376,7 +382,7 @@ Diff-target safety check: before any `git apply --check` or `git apply`, every a
 
 `apply --file <artifact.json> --yes --branch <branch-name> --commit --message <commit-message>` extends confirmed apply into an explicit local branch + commit. `--commit` requires both `--branch` and `--message`; omitting either exits non-zero. The branch name is rejected when it is empty, padded or contains whitespace, starts with `-`, or contains `..` or a backslash, and `src/main.ts` also runs `git check-ref-format --branch` as a final guard. The `--message` is taken verbatim and is rejected when it contains a `Co-Authored-By` or `Generated with` AI-signature trailer; the CLI never invents a default message. Before any write it reuses artifact validation, suggested-file path safety, the clean-repo preflight, the diff-target safety check (covering both `diff --git` and plain `---`/`+++` headers), and `git apply --check`, so an unexpected file is never applied or committed. The git write operations are limited to `git switch -c <branch>`, `git apply`, `git add -- <suggested files>`, and `git commit -m <message>`; it never runs `git push`, `git pull`, `git checkout`, `git reset`, or any PR/MR command. On success it prints a deterministic branch/commit report including the branch name, committed files, `Patch check: passed`, `Patch apply: applied`, `Git add: staged selected files`, `Git commit: created`, and the explicit `push: false` / `createsPr: false` safety flags.
 
-The core logic is exposed as pure functions for embedding and testing: `validatePatchArtifactInput(input)`, `formatPatchArtifactPreview(artifact)`, `formatApplyDryRunPlan(input)`, `formatPatchCheckReport(input)`, `formatApplyReport(input)`, `formatBranchCommitReport(input)`, `runPreviewCommand(args, deps)`, `runApplyDryRunCommand(args, deps)`, `runApplyCheckCommand(args, deps)`, `runApplyConfirmedCommand(args, deps)`, and `runCliCommand(args, deps)`. `src/main.ts` only adapts `process.argv`/`stdout`/`stderr`, two read-only git commands (`rev-parse --show-toplevel`, `status --short`), the no-write `git apply --check`, confirmed `git apply` for `--yes`, and the `git check-ref-format` / `git switch -c` / `git add` / `git commit` writes for `--commit`. Remote `--url` fetching, push, and PR/MR delivery remain planned.
+The core logic is exposed as pure functions for embedding and testing: `validatePatchArtifactInput(input)`, `formatPatchArtifactPreview(artifact)`, `formatApplyDryRunPlan(input)`, `formatPatchCheckReport(input)`, `formatApplyReport(input)`, `formatBranchCommitReport(input)`, `formatPullReport(input)`, `runPreviewCommand(args, deps)`, `runPullCommand(args, deps)`, `runApplyDryRunCommand(args, deps)`, `runApplyCheckCommand(args, deps)`, `runApplyConfirmedCommand(args, deps)`, and `runCliCommand(args, deps)`. `runPullCommand` takes injected `fetchArtifact`/`writeFile` deps so the network and filesystem stay out of the testable core. `src/main.ts` only adapts `process.argv`/`stdout`/`stderr`, the real `fetch` and file write for `pull`, two read-only git commands (`rev-parse --show-toplevel`, `status --short`), the no-write `git apply --check`, confirmed `git apply` for `--yes`, and the `git check-ref-format` / `git switch -c` / `git add` / `git commit` writes for `--commit`. Push and PR/MR delivery remain planned.
 
 ## Payload Shape
 
@@ -443,7 +449,7 @@ packages/
   annotation-core/       Runtime SDK for browser annotation
   annotation-vite/       Current Vite plugin for React source metadata
   annotation-node/       Current Node protocol kit: validation, source resolution, prompt context
-  annotation-cli/        Current local CLI: previews artifacts, runs dry-run/check, applies with explicit --yes, and can branch + local-commit (push/PR still planned)
+  annotation-cli/        Current local CLI: pulls artifacts over HTTP, previews, runs dry-run/check, applies with explicit --yes, and can branch + local-commit (push/PR still planned)
 
 apps/
   platform-starter/      Current minimal HTTP ingest API + bilingual static task console

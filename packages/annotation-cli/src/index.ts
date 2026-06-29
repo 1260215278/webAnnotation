@@ -68,6 +68,22 @@ export interface ApplyBranchCommitCommandDependencies extends ApplyConfirmedComm
   commitChanges: (message: string) => Promise<void>
 }
 
+export interface PullResponse {
+  ok: boolean
+  status: number
+  text: () => Promise<string>
+}
+
+export interface PullCommandDependencies {
+  fetchArtifact: (url: string, headers: Record<string, string>) => Promise<PullResponse>
+  writeFile: (file: string, content: string) => Promise<void>
+}
+
+export interface CliCommandDependencies extends ApplyConfirmedCommandDependencies {
+  fetchArtifact?: PullCommandDependencies["fetchArtifact"]
+  writeFile?: PullCommandDependencies["writeFile"]
+}
+
 export interface PreviewCommandResult {
   code: number
   stdout: string
@@ -84,6 +100,11 @@ export type PatchCheckReportInput = ApplyDryRunPlanInput
 export type ApplyReportInput = ApplyDryRunPlanInput
 export interface BranchCommitReportInput extends ApplyDryRunPlanInput {
   branchName: string
+}
+
+export interface PullReportInput {
+  artifact: PatchArtifactPreviewInput
+  outFile: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -297,6 +318,26 @@ export function formatBranchCommitReport(input: BranchCommitReportInput): string
   ].join("\n")
 }
 
+export function formatPullReport(input: PullReportInput): string {
+  const suggestedFiles =
+    input.artifact.patchProposal.suggestedFiles.length === 0
+      ? ["- (none)"]
+      : input.artifact.patchProposal.suggestedFiles.map((file) => `- ${file}`)
+  return [
+    "Patch artifact pull report",
+    `Task: ${input.artifact.taskId} [${input.artifact.taskStatus}]`,
+    `Out file: ${input.outFile}`,
+    "Suggested files:",
+    ...suggestedFiles,
+    `Review: ${input.artifact.patchReview?.status ?? "unreviewed"}`,
+    "Safety:",
+    "- appliesPatch: false",
+    "- writesRepoFiles: false",
+    "- createsCommit: false",
+    "",
+  ].join("\n")
+}
+
 function previewUsage(): string {
   return "Usage: web-annotation preview --file <artifact.json>\n"
 }
@@ -321,6 +362,10 @@ function branchCommitUsage(): string {
   return "Usage: web-annotation apply --file <artifact.json> --yes --branch <branch-name> --commit --message <commit-message>\n"
 }
 
+function pullUsage(): string {
+  return "Usage: web-annotation pull <task-id> --base-url <platform-url> --out <artifact.json> [--token <token>]\n"
+}
+
 function cliUsage(): string {
   return [
     previewUsage().trimEnd(),
@@ -328,6 +373,7 @@ function cliUsage(): string {
     applyCheckUsage().trimEnd(),
     applyConfirmedUsage().trimEnd(),
     branchCommitUsage().trimEnd(),
+    pullUsage().trimEnd(),
     "",
   ].join("\n")
 }
@@ -619,6 +665,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error"
 }
 
+function redactToken(message: string, token: string | undefined): string {
+  if (!token) return message
+  return message.split(token).join("[redacted]")
+}
+
 async function prepareApplyCommand(
   file: string,
   deps: ApplyDryRunCommandDependencies,
@@ -895,11 +946,129 @@ export async function runApplyConfirmedCommand(
   }
 }
 
+function buildArtifactUrl(baseUrl: string, taskId: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, "")
+  return `${trimmed}/api/tasks/${encodeURIComponent(taskId)}/patch-artifact`
+}
+
+/**
+ * The platform export endpoint wraps the artifact as `{ artifact }`; accept both
+ * that documented shape and a bare artifact object so the same validator applies.
+ */
+function extractArtifactPayload(parsed: unknown): unknown {
+  if (isRecord(parsed) && isRecord(parsed.artifact)) return parsed.artifact
+  return parsed
+}
+
+export async function runPullCommand(
+  args: string[],
+  deps: PullCommandDependencies,
+): Promise<PreviewCommandResult> {
+  if (args[0] !== "pull") {
+    return { code: 1, stdout: "", stderr: pullUsage() }
+  }
+  const taskId = args[1]
+  const baseUrl = getArg(args, "--base-url")
+  const outFile = getArg(args, "--out")
+  if (!taskId || taskId.startsWith("--") || !baseUrl || !outFile) {
+    return { code: 1, stdout: "", stderr: pullUsage() }
+  }
+
+  let parsedBase: URL
+  try {
+    parsedBase = new URL(baseUrl)
+  } catch {
+    return { code: 1, stdout: "", stderr: "Invalid base URL: must be an http: or https: URL\n" }
+  }
+  if (parsedBase.protocol !== "http:" && parsedBase.protocol !== "https:") {
+    return { code: 1, stdout: "", stderr: "Invalid base URL: must be an http: or https: URL\n" }
+  }
+
+  const token = getArg(args, "--token")
+  const headers: Record<string, string> = { accept: "application/json" }
+  if (token) headers.authorization = `Bearer ${token}`
+
+  const url = buildArtifactUrl(baseUrl, taskId)
+
+  let response: PullResponse
+  try {
+    response = await deps.fetchArtifact(url, headers)
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `Pull request failed: ${redactToken(errorMessage(error), token)}\n`,
+    }
+  }
+
+  if (!response.ok) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `Pull failed: artifact request returned HTTP ${response.status}\n`,
+    }
+  }
+
+  let raw: string
+  try {
+    raw = await response.text()
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `Pull request failed: ${redactToken(errorMessage(error), token)}\n`,
+    }
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { code: 1, stdout: "", stderr: "Pull response is not valid JSON\n" }
+  }
+
+  const payload = extractArtifactPayload(parsed)
+  const validation = validatePatchArtifactInput(payload)
+  if (!validation.ok) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `Invalid patch artifact:\n${issueText(validation.issues)}\n`,
+    }
+  }
+
+  try {
+    await deps.writeFile(outFile, `${JSON.stringify(payload, null, 2)}\n`)
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `Failed to write artifact file: ${redactToken(errorMessage(error), token)}\n`,
+    }
+  }
+
+  return {
+    code: 0,
+    stdout: formatPullReport({ artifact: validation.artifact, outFile }),
+    stderr: "",
+  }
+}
+
 export function runCliCommand(
   args: string[],
-  deps: ApplyConfirmedCommandDependencies,
+  deps: CliCommandDependencies,
 ): Promise<PreviewCommandResult> {
   if (args[0] === "preview") return runPreviewCommand(args, deps)
+  if (args[0] === "pull") {
+    if (!deps.fetchArtifact || !deps.writeFile) {
+      return Promise.resolve({
+        code: 1,
+        stdout: "",
+        stderr: "Pull dependencies are not configured\n",
+      })
+    }
+    return runPullCommand(args, { fetchArtifact: deps.fetchArtifact, writeFile: deps.writeFile })
+  }
   if (args[0] === "apply" && args.includes("--yes")) return runApplyConfirmedCommand(args, deps)
   if (args[0] === "apply" && args.includes("--check")) return runApplyCheckCommand(args, deps)
   if (args[0] === "apply" && args.includes("--dry-run")) return runApplyDryRunCommand(args, deps)

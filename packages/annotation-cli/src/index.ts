@@ -1,3 +1,5 @@
+import { posix, win32 } from "node:path"
+
 export const PATCH_ARTIFACT_VERSION = "web-annotation.patch-artifact.v1" as const
 
 export interface ValidationIssue {
@@ -42,10 +44,21 @@ export interface PreviewCommandDependencies {
   readFile: (file: string) => Promise<string>
 }
 
+export interface ApplyDryRunCommandDependencies extends PreviewCommandDependencies {
+  getRepoRoot: () => Promise<string>
+  getGitStatus: () => Promise<string>
+}
+
 export interface PreviewCommandResult {
   code: number
   stdout: string
   stderr: string
+}
+
+export interface ApplyDryRunPlanInput {
+  artifact: PatchArtifactPreviewInput
+  repoRoot: string
+  suggestedFiles: string[]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -172,12 +185,130 @@ export function formatPatchArtifactPreview(artifact: PatchArtifactPreviewInput):
   ].join("\n")
 }
 
-function usage(): string {
+export function formatApplyDryRunPlan(input: ApplyDryRunPlanInput): string {
+  const suggestedFiles =
+    input.suggestedFiles.length === 0
+      ? ["- (none)"]
+      : input.suggestedFiles.map((file) => `- ${file}`)
+  return [
+    "Apply dry-run plan",
+    `Task: ${input.artifact.taskId} [${input.artifact.taskStatus}]`,
+    `Repo root: ${input.repoRoot}`,
+    "Suggested files:",
+    ...suggestedFiles,
+    `Review: ${input.artifact.patchReview?.status ?? "unreviewed"}`,
+    "Safety:",
+    "- appliesPatch: false",
+    "- writesFiles: false",
+    "- createsCommit: false",
+    "Diff preview:",
+    input.artifact.patchProposal.diffPreview,
+    "",
+  ].join("\n")
+}
+
+function previewUsage(): string {
   return "Usage: web-annotation preview --file <artifact.json>\n"
+}
+
+function applyDryRunUsage(): string {
+  return "Usage: web-annotation apply --file <artifact.json> --dry-run\n"
+}
+
+function cliUsage(): string {
+  return [previewUsage().trimEnd(), applyDryRunUsage().trimEnd(), ""].join("\n")
 }
 
 function issueText(issues: ValidationIssue[]): string {
   return issues.map((issue) => `${issue.path || "artifact"}: ${issue.message}`).join("\n")
+}
+
+type ValidateSuggestedFilesResult =
+  | { ok: true; suggestedFiles: string[] }
+  | { ok: false; issues: ValidationIssue[] }
+
+function getFileArg(args: string[]): string | undefined {
+  const fileFlagIndex = args.indexOf("--file")
+  return fileFlagIndex >= 0 ? args[fileFlagIndex + 1] : undefined
+}
+
+async function readAndValidateArtifact(
+  file: string,
+  deps: PreviewCommandDependencies,
+): Promise<
+  | { ok: true; artifact: PatchArtifactPreviewInput }
+  | { ok: false; result: PreviewCommandResult }
+> {
+  let raw: string
+  try {
+    raw = await deps.readFile(file)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error"
+    return {
+      ok: false,
+      result: { code: 1, stdout: "", stderr: `Failed to read artifact file: ${message}\n` },
+    }
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return {
+      ok: false,
+      result: { code: 1, stdout: "", stderr: "Artifact file is not valid JSON\n" },
+    }
+  }
+
+  const result = validatePatchArtifactInput(parsed)
+  if (!result.ok) {
+    return {
+      ok: false,
+      result: {
+        code: 1,
+        stdout: "",
+        stderr: `Invalid patch artifact:\n${issueText(result.issues)}\n`,
+      },
+    }
+  }
+  return { ok: true, artifact: result.artifact }
+}
+
+function validateSuggestedFiles(files: string[]): ValidateSuggestedFilesResult {
+  const issues: ValidationIssue[] = []
+  const suggestedFiles: string[] = []
+
+  files.forEach((file, index) => {
+    const path = `patchProposal.suggestedFiles[${index}]`
+    const trimmed = file.trim()
+    if (trimmed.length === 0) {
+      issues.push({ path, message: "file must not be empty" })
+      return
+    }
+    if (posix.isAbsolute(trimmed) || win32.isAbsolute(trimmed)) {
+      issues.push({ path, message: "file must be relative" })
+      return
+    }
+    const normalizedInput = trimmed.replace(/\\/g, "/")
+    const segments = normalizedInput.split("/").filter(Boolean)
+    if (segments.includes("..")) {
+      issues.push({ path, message: "file must not contain .." })
+      return
+    }
+    const normalized = posix.normalize(normalizedInput)
+    if (normalized === "." || normalized.startsWith("../")) {
+      issues.push({ path, message: "file must stay inside the repository" })
+      return
+    }
+    suggestedFiles.push(normalized)
+  })
+
+  if (issues.length > 0) return { ok: false, issues }
+  return { ok: true, suggestedFiles }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown error"
 }
 
 export async function runPreviewCommand(
@@ -185,33 +316,80 @@ export async function runPreviewCommand(
   deps: PreviewCommandDependencies,
 ): Promise<PreviewCommandResult> {
   if (args[0] !== "preview") {
-    return { code: 1, stdout: "", stderr: usage() }
+    return { code: 1, stdout: "", stderr: previewUsage() }
   }
-  const fileFlagIndex = args.indexOf("--file")
-  const file = fileFlagIndex >= 0 ? args[fileFlagIndex + 1] : undefined
+  const file = getFileArg(args)
   if (!file) {
-    return { code: 1, stdout: "", stderr: usage() }
+    return { code: 1, stdout: "", stderr: previewUsage() }
   }
 
-  let raw: string
-  try {
-    raw = await deps.readFile(file)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown error"
-    return { code: 1, stdout: "", stderr: `Failed to read artifact file: ${message}\n` }
-  }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return { code: 1, stdout: "", stderr: "Artifact file is not valid JSON\n" }
-  }
-
-  const result = validatePatchArtifactInput(parsed)
+  const result = await readAndValidateArtifact(file, deps)
   if (!result.ok) {
-    return { code: 1, stdout: "", stderr: `Invalid patch artifact:\n${issueText(result.issues)}\n` }
+    return result.result
   }
 
   return { code: 0, stdout: formatPatchArtifactPreview(result.artifact), stderr: "" }
+}
+
+export async function runApplyDryRunCommand(
+  args: string[],
+  deps: ApplyDryRunCommandDependencies,
+): Promise<PreviewCommandResult> {
+  if (args[0] !== "apply" || !args.includes("--dry-run")) {
+    return { code: 1, stdout: "", stderr: applyDryRunUsage() }
+  }
+  const file = getFileArg(args)
+  if (!file) {
+    return { code: 1, stdout: "", stderr: applyDryRunUsage() }
+  }
+
+  const artifactResult = await readAndValidateArtifact(file, deps)
+  if (!artifactResult.ok) {
+    return artifactResult.result
+  }
+
+  const suggestedFilesResult = validateSuggestedFiles(
+    artifactResult.artifact.patchProposal.suggestedFiles,
+  )
+  if (!suggestedFilesResult.ok) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `Invalid suggested files:\n${issueText(suggestedFilesResult.issues)}\n`,
+    }
+  }
+
+  let repoRoot: string
+  try {
+    repoRoot = await deps.getRepoRoot()
+    const status = await deps.getGitStatus()
+    if (status.trim().length > 0) {
+      return {
+        code: 1,
+        stdout: "",
+        stderr: "Git preflight failed: working tree must be clean before dry-run\n",
+      }
+    }
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `Git preflight failed: ${errorMessage(error)}\n` }
+  }
+
+  return {
+    code: 0,
+    stdout: formatApplyDryRunPlan({
+      artifact: artifactResult.artifact,
+      repoRoot,
+      suggestedFiles: suggestedFilesResult.suggestedFiles,
+    }),
+    stderr: "",
+  }
+}
+
+export function runCliCommand(
+  args: string[],
+  deps: ApplyDryRunCommandDependencies,
+): Promise<PreviewCommandResult> {
+  if (args[0] === "preview") return runPreviewCommand(args, deps)
+  if (args[0] === "apply") return runApplyDryRunCommand(args, deps)
+  return Promise.resolve({ code: 1, stdout: "", stderr: cliUsage() })
 }

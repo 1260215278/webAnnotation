@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
+  formatApplyDryRunPlan,
   formatPatchArtifactPreview,
+  runApplyDryRunCommand,
+  runCliCommand,
   runPreviewCommand,
   validatePatchArtifactInput,
 } from "../src/index"
@@ -160,5 +163,147 @@ describe("runPreviewCommand", () => {
       stdout: "",
       stderr: "Artifact file is not valid JSON\n",
     })
+  })
+})
+
+describe("formatApplyDryRunPlan", () => {
+  it("formats a stable dry-run plan with safety flags and diff", () => {
+    const result = validatePatchArtifactInput(makeArtifact())
+    if (!result.ok) throw new Error("fixture should be valid")
+
+    expect(
+      formatApplyDryRunPlan({
+        artifact: result.artifact,
+        repoRoot: "/repo/web-console",
+        suggestedFiles: ["src/App.tsx"],
+      }),
+    ).toBe(
+      [
+        "Apply dry-run plan",
+        "Task: task_example [patch_accepted]",
+        "Repo root: /repo/web-console",
+        "Suggested files:",
+        "- src/App.tsx",
+        "Review: accepted",
+        "Safety:",
+        "- appliesPatch: false",
+        "- writesFiles: false",
+        "- createsCommit: false",
+        "Diff preview:",
+        "--- a/src/App.tsx\n+++ b/src/App.tsx\n@@\n- Submit\n+ Save settings",
+        "",
+      ].join("\n"),
+    )
+  })
+})
+
+describe("runApplyDryRunCommand", () => {
+  it("returns a dry-run plan for a valid artifact in a clean repository", async () => {
+    const calls: string[] = []
+    const result = await runApplyDryRunCommand(["apply", "--file", "artifact.json", "--dry-run"], {
+      readFile: async () => JSON.stringify(makeArtifact()),
+      getRepoRoot: async () => {
+        calls.push("getRepoRoot")
+        return "/repo/web-console"
+      },
+      getGitStatus: async () => {
+        calls.push("getGitStatus")
+        return ""
+      },
+    })
+
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Apply dry-run plan")
+    expect(result.stdout).toContain("Repo root: /repo/web-console")
+    expect(result.stdout).toContain("- src/App.tsx")
+    expect(result.stdout).toContain("Review: accepted")
+    expect(result.stdout).toContain("- appliesPatch: false")
+    expect(result.stdout).toContain("- writesFiles: false")
+    expect(result.stdout).toContain("- createsCommit: false")
+    expect(result.stdout).toContain("Diff preview:")
+    expect(calls).toEqual(["getRepoRoot", "getGitStatus"])
+  })
+
+  it("rejects apply without dry-run", async () => {
+    const result = await runApplyDryRunCommand(["apply", "--file", "artifact.json"], {
+      readFile: async () => JSON.stringify(makeArtifact()),
+      getRepoRoot: async () => "/repo/web-console",
+      getGitStatus: async () => "",
+    })
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "Usage: web-annotation apply --file <artifact.json> --dry-run\n",
+    })
+  })
+
+  it("returns a readable error outside a git repository", async () => {
+    const result = await runApplyDryRunCommand(["apply", "--file", "artifact.json", "--dry-run"], {
+      readFile: async () => JSON.stringify(makeArtifact()),
+      getRepoRoot: async () => {
+        throw new Error("not a git repository")
+      },
+      getGitStatus: async () => "",
+    })
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "Git preflight failed: not a git repository\n",
+    })
+  })
+
+  it("rejects a dirty working tree", async () => {
+    const result = await runApplyDryRunCommand(["apply", "--file", "artifact.json", "--dry-run"], {
+      readFile: async () => JSON.stringify(makeArtifact()),
+      getRepoRoot: async () => "/repo/web-console",
+      getGitStatus: async () => " M src/App.tsx\n",
+    })
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "Git preflight failed: working tree must be clean before dry-run\n",
+    })
+  })
+
+  it("rejects unsafe suggested files", async () => {
+    for (const unsafeFile of ["/tmp/App.tsx", "C:\\tmp\\App.tsx", "../outside.ts", ""]) {
+      const artifact = makeArtifact({
+        patchProposal: {
+          summary: "Unsafe path",
+          suggestedFiles: [unsafeFile],
+          diffPreview: "diff",
+        },
+      })
+      const result = await runApplyDryRunCommand(
+        ["apply", "--file", "artifact.json", "--dry-run"],
+        {
+          readFile: async () => JSON.stringify(artifact),
+          getRepoRoot: async () => "/repo/web-console",
+          getGitStatus: async () => "",
+        },
+      )
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain("Invalid suggested files:")
+    }
+  })
+})
+
+describe("runCliCommand", () => {
+  it("dispatches preview and apply commands", async () => {
+    const deps = {
+      readFile: async () => JSON.stringify(makeArtifact()),
+      getRepoRoot: async () => "/repo/web-console",
+      getGitStatus: async () => "",
+    }
+
+    expect((await runCliCommand(["preview", "--file", "artifact.json"], deps)).code).toBe(0)
+    expect((await runCliCommand(["apply", "--file", "artifact.json", "--dry-run"], deps)).code).toBe(
+      0,
+    )
   })
 })

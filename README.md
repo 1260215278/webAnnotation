@@ -1,10 +1,636 @@
 # webAnnotation
 
+> 默认语言：简体中文。英文原文保留在文末折叠区，便于对照。
+
+AI-first 的 Web 标注工具集，用来把页面反馈转换成结构化的代码修改上下文。
+
+`webAnnotation` 让宿主 Web 应用进入标注模式：用户可以选择 DOM 元素、填写反馈、提交 `AnnotationPayload v1` 到配置好的后端。项目长期目标是把这些 payload 连接到 AI 补丁生成、PR/MR review，以及本地 CLI 应用补丁流程。
+
+> 状态：早期 MVP 开发中。当前仓库已经包含 Runtime SDK、React 源码元数据 Vite 插件、Node 协议包、CLI 和本地示例。可发布包已在 npm 上提供 `0.1.0` 版本。`apps/platform-starter` 和 `examples/*` 包是私有示例/应用，不会发布。
+
+## 功能流程调用图
+
+![webAnnotation Q版功能流程调用图](docs/assets/webannotation-flow-chibi.png)
+
+调用主链路：业务页面挂载 `Runtime SDK` 创建标注，`@web-annotation/vite`
+在构建期注入源码元数据，SDK 组装 `AnnotationPayload v1` 后提交给
+`Platform API`；平台侧通过 `@web-annotation/node` 校验、补全 source
+manifest、构建 patch prompt context，并在需要时收集仓库源码片段；随后
+`Patch Provider` 生成补丁建议，人工 review 后导出 patch artifact，最后由
+`@web-annotation/cli` 在本地执行 dry-run/check/apply/branch commit 流程。
+
+## 当前 MVP
+
+仓库当前包含：
+
+- `@web-annotation/core`：浏览器 Runtime SDK。
+- `@web-annotation/vite`：面向 React JSX/TSX 源码元数据的 Vite 插件。
+- `@web-annotation/node`：Node 侧协议包，用于 payload 校验和 AI patch 上下文构建。
+- `apps/platform-starter`：最小 HTTP 接入 API，包含双语静态任务控制台；它会校验 payload、存储任务、收集仓库源码上下文，并提出 mock patch。
+- `examples/playground`：用于本地验证的最小 Vite 页面。
+- `examples/vite-react`：React + Vite 示例，展示 DOM 到源码 payload。
+- `examples/provider-http-mock`：可运行的 HTTP patch-provider 参考实现和端到端 smoke test。
+- TypeScript 类型检查、单元测试和构建脚本。
+
+Runtime SDK 当前支持：
+
+- `createAnnotator(options)`。
+- `enable()`、`disable()`、`isEnabled()`、`mountWidget()`、`destroy()`。
+- hover 高亮和点击锁定目标元素。
+- 锁定元素旁边的小型浮动 textarea。
+- `Enter` 提交、`Shift+Enter` 换行、`Esc` 取消。
+- `submitAnnotation(payload)` 自定义提交。
+- `endpoint` 加可选 `getAuthToken()` 的 POST 提交。
+- `AnnotationPayload v1`，包含项目、页面、目标 selector、CSS path、元素文本、rect 和清洗后的 DOM snapshot。
+- 当 Vite 插件注入源码元数据时，支持可选 `target.source`。
+- 可选图片附件：在弹窗中选择图片、预览缩略图、移除图片，并展示单张图片上传中/失败状态。图片会先上传，再提交标注；payload 只携带上传后的引用，不携带原始图片字节。
+- 内置轻量 locale 机制：`locale: "zh" | "en"`，默认根据 `navigator.language` 自动检测。
+
+Vite 插件当前支持：
+
+- 对 React JSX/TSX 原生 HTML 元素注入源码元数据。
+- `mode: "source"`：注入 `file`、`line`、`column`、`component`、`framework` 和 `sourceId`。
+- `mode: "safe"`：浏览器 payload 只包含匿名 `sourceId`。
+- `mode: "disabled"`：跳过源码元数据注入。
+- `include` / `exclude` 过滤。
+- 内存 manifest 回调，用于后端把 `sourceId` 映射回源码位置。
+
+Node 协议包当前支持：
+
+- `validateAnnotationPayload(input)` / `assertAnnotationPayload(input)`：运行时校验 `AnnotationPayload v1`，并返回可读问题。
+- `validateSourceManifest(input)`：运行时校验 `sourceId` 到源码位置的 manifest。
+- `resolvePayloadSources(payload, manifest)`：用可信 manifest 补全 safe-mode payload，不修改输入对象。
+- `buildPatchPromptContext(payload, options?)`：为 AI patch prompt 构建稳定、可序列化的摘要。
+- `collectRepoSourceContext(promptContext, options)`：安全读取 `source.file`/`line` 指向的仓库源码片段，包含路径穿越、超大文件、二进制文件保护和可读问题。
+- 图片附件校验：每个 `annotations[].attachments[]` 图片都必须有合法 `kind`、`id`/`name`、白名单 MIME、正整数 `size`、可选宽高和 `storage` 引用；拒绝 `data`/`base64`/`content` 等原始内容字段。
+
+Platform Starter 接入 API 当前支持：
+
+- `GET /health`：存活检查。
+- `POST /api/annotations`：校验 payload，可选 `{ payload, manifest }`，解析 safe-mode source，存储任务并返回 `{ taskId, status }`。
+- `POST /api/uploads/images`：最小 JSON/base64 图片上传接口，严格校验 MIME、base64、图片魔数和 5 MiB 默认大小上限；返回存储引用，不返回原始字节。
+- `GET /api/uploads/images/<objectKey>`：读取可检索 provider 中的图片字节，让控制台缩略图可访问。
+- `GET /api/tasks`：列出任务摘要。
+- `GET /api/tasks/:id`：获取任务详情、prompt context、source context、patch proposal 和 review。
+- `POST /api/tasks/:id/source-context`：在配置了 repo root 时收集源码片段。
+- `POST /api/tasks/:id/patch`：调用注入的 patch provider 创建补丁建议。
+- `POST /api/tasks/:id/mock-patch`：生成确定性的 mock patch proposal。
+- `POST /api/tasks/:id/patch-review`：记录人工 `accept` / `reject` / `changes_requested` 决策，只记录决策，不应用补丁。
+- `GET /api/tasks/:id/patch-artifact`：导出 `web-annotation.patch-artifact.v1` JSON artifact，供后续 CLI/Git/AI apply 流程使用；导出本身不写文件。
+- `GET /` 和 `GET /console`：最小双语静态 HTML 任务控制台。
+- `createHttpPatchProvider(options)`：连接外部 AI/自定义 patch 服务的通用 HTTP 适配器。
+- `createOpenAICompatiblePatchProvider(options)`：OpenAI-compatible chat-completions patch provider；要求显式 `endpoint` 和 `model`，服务端保管 API key，并只接受声明的 `{ summary, suggestedFiles, diffPreview, metadata? }` JSON 结果。
+- `ImageStorageProvider` 接口和内置 `createMemoryImageStorage()` 测试 provider。
+- direct provider 与 HTTP/model provider 共享的 patch-provider 结果运行时校验。
+- 双语任务控制台中的图片附件缩略图/链接渲染。
+- `TaskStore` 接口背后的内存任务存储，以及可测试的 `createPlatformServer()` 工厂。
+
+仍在计划中：
+
+- 截图捕获。
+- Vue SFC 源码元数据注入。
+- 更多模型专用 provider 适配器，以及生产级任务控制台流程。
+- 生产对象存储（例如 OSS）的 `ImageStorageProvider` 实现。
+- 浏览器/服务端检测内置 JSON/base64 上传路径中的图片宽高。
+- 平台持久化存储。
+- CLI push 和 PR/MR 交付。
+- npm 发布到 `0.1.0` 之后的后续版本：未来 release 仍需要常规 version bump、pack/tarball 检查和 npm publish 流程。
+
+## 从 npm 安装
+
+按需安装包：
+
+```sh
+pnpm add @web-annotation/core       # 浏览器 Runtime SDK
+pnpm add @web-annotation/node       # Node 侧协议包
+pnpm add -D @web-annotation/vite    # Vite 插件（React 源码元数据）
+pnpm dlx @web-annotation/cli --help # patch-artifact CLI（无需安装即可运行）
+```
+
+`apps/platform-starter` 和 `examples/*` 包是私有包，不会发布；需要 clone 仓库后在本地运行。
+
+## 本地安装与验证
+
+```sh
+pnpm install
+```
+
+运行验证套件：
+
+```sh
+pnpm run typecheck
+pnpm run test
+pnpm run build
+```
+
+运行 playground：
+
+```sh
+pnpm example
+```
+
+打开命令输出的本地 URL，启用标注模式，选择一个元素，填写备注并按 `Enter`。提交后的 payload 会显示在页面和控制台中。
+
+运行 React 源码元数据示例：
+
+```sh
+pnpm example:react
+```
+
+React 示例会使用 Vite 插件，并展示带有 `annotations[].target.source` 的提交 payload。
+
+## Runtime SDK 用法
+
+当你想收集 annotation payload 并发送到自己的后端时，使用 SDK：
+
+```ts
+import { createAnnotator } from "@web-annotation/core"
+
+const annotator = createAnnotator({
+  projectId: "web-console",
+  environment: "staging",
+  endpoint: "https://your-api.example.com/annotations",
+  getAuthToken: async () => "short-lived-token",
+  capture: {
+    domSnapshot: true
+  }
+})
+
+annotator.mountWidget()
+```
+
+对于高级集成，宿主应用可以完全控制提交逻辑：
+
+```ts
+const annotator = createAnnotator({
+  projectId: "web-console",
+  environment: "staging",
+  submitAnnotation: async (payload) => {
+    await yourGateway.post("/annotations", payload)
+  }
+})
+
+annotator.enable()
+```
+
+## API
+
+```ts
+const annotator = createAnnotator(options)
+
+annotator.enable()
+annotator.disable()
+annotator.isEnabled()
+annotator.mountWidget()
+annotator.destroy()
+```
+
+### `AnnotatorOptions`
+
+```ts
+interface AnnotatorOptions {
+  projectId: string
+  environment?: string
+  release?: string
+  commit?: string
+  endpoint?: string
+  getAuthToken?: () => string | Promise<string>
+  submitAnnotation?: (payload: AnnotationPayload) => void | Promise<void>
+  capture?: {
+    domSnapshot?: boolean
+    screenshot?: boolean
+    sourceMetadata?: "auto" | "disabled"
+  }
+}
+```
+
+`submitAnnotation` 优先于 `endpoint`。如果两者都没有提供，提交标注时会抛出配置错误。
+
+`capture.screenshot` 预留给计划中的截图包。`capture.sourceMetadata` 默认为 `"auto"`，只有构建插件向 DOM 注入源码元数据时才会读取。
+
+### 图片附件
+
+通过 `attachments.images` 启用标注弹窗中的图片附件。需要提供上传器：`uploadImage` 优先级高于 `uploadEndpoint`，前者让宿主完整控制上传（例如上传到 OSS 并返回存储元数据），后者使用 JSON/base64 上传接口并返回 `{ attachment }`。
+
+图片会在标注提交前上传；如果任意图片上传失败，标注不会提交，用户可以移除失败图片后重新提交。payload 只携带上传后的引用，不携带原始图片字节。
+
+```ts
+const annotator = createAnnotator({
+  projectId: "web-console",
+  submitAnnotation: async (payload) => { /* ... */ },
+  locale: "zh", // optional; auto-detected from navigator.language otherwise
+  attachments: {
+    images: true,
+    maxImages: 4,                 // default 4
+    maxImageBytes: 5 * 1024 * 1024, // default 5 MiB
+    acceptedImageTypes: ["image/png", "image/jpeg", "image/webp", "image/gif"], // default
+
+    // Option A: full host control (e.g. upload to OSS, return the reference).
+    uploadImage: async (file, context) => ({
+      id: "att_…",
+      kind: "image",
+      name: file.name,
+      mimeType: file.type,
+      size: file.size,
+      storage: { provider: "oss", objectKey: "uploads/…", url: "https://cdn…/…" }
+    }),
+
+    // Option B: JSON/base64 endpoint (e.g. the Platform Starter upload route).
+    // uploadEndpoint: "https://your-api.example.com/api/uploads/images",
+    // getUploadAuthToken: async () => "short-lived-token"
+  }
+})
+```
+
+## Vite 插件用法
+
+当你希望 annotation 带有足够上下文，让 AI 或后端服务定位源码组件时，使用 Vite 插件：
+
+```ts
+import { defineConfig } from "vite"
+import react from "@vitejs/plugin-react"
+import { annotationPlugin } from "@web-annotation/vite"
+
+export default defineConfig({
+  plugins: [
+    annotationPlugin({
+      mode: "source"
+    }),
+    react()
+  ]
+})
+```
+
+面向生产的 safe mode 会把真实文件路径和行号留在浏览器 payload 之外：
+
+```ts
+annotationPlugin({
+  mode: "safe",
+  onManifest: (manifest) => {
+    // Store this on your backend or emit it into your own build artifact.
+    console.log(manifest)
+  }
+})
+```
+
+模式行为：
+
+- `source`：浏览器 DOM 和 payload 包含 `sourceId`、`file`、`line`、`column`、`component` 和 `framework`。
+- `safe`：浏览器 DOM 和 payload 只包含 `sourceId`；manifest 为可信代码保留完整映射。
+- `disabled`：不注入 source attributes；Runtime SDK 仍可使用 selector 和 DOM snapshot 上下文工作。
+
+## Node 协议包用法
+
+在后端或 AI 层使用 Node kit 校验收到的 payload、用可信 manifest 解析 safe-mode source，并构建确定性的 prompt context。它不会调用 AI API，不读取模型 key，也不触碰 Git provider。
+
+```ts
+import {
+  assertAnnotationPayload,
+  resolvePayloadSources,
+  buildPatchPromptContext,
+} from "@web-annotation/node"
+
+// 1. Validate the payload received from the browser (throws on invalid input).
+const payload = assertAnnotationPayload(requestBody)
+
+// 2. In safe mode the browser only sent `sourceId`; resolve it with your manifest.
+const resolved = resolvePayloadSources(payload, sourceManifest)
+
+// 3. Build a stable, serializable context for an AI patch prompt.
+const context = buildPatchPromptContext(resolved, { maxDomSnapshotLength: 2000 })
+```
+
+`validateAnnotationPayload` 返回 `{ ok: true, payload }` 或 `{ ok: false, issues }`，不会抛错。`validateSourceManifest` 校验 `@web-annotation/vite` 产出的 manifest。safe-mode manifest 保留在可信后端，不会发送到浏览器。
+
+当 prompt context 中包含 `source.file`/`line` 时，`collectRepoSourceContext` 可以从本地 checkout 读取相关源码片段。这是未来 AI patch 步骤的基础构件。它不调用 AI、不生成 diff，也不修改文件：
+
+```ts
+import { collectRepoSourceContext } from "@web-annotation/node"
+
+const { files, issues } = collectRepoSourceContext(context, {
+  rootDir: "/abs/path/to/repo",
+  contextLines: 20,      // lines before/after the annotated line(s)
+  maxFiles: 8,           // cap distinct files read
+  maxBytesPerFile: 65536 // skip oversized files
+})
+// files[i] = { file (relative), startLine, endLine, content, annotations }
+```
+
+安全约束：只接受 context 中的相对路径；拒绝绝对路径、空路径和逃逸 `rootDir` 的 `..`；同一文件只读取一次；缺失、超大或二进制文件会变成 `issues`，不会抛错；返回的 `file` 始终是仓库相对路径。
+
+为了防止 AI/自定义 provider 的 `diffPreview` 悄悄编辑未声明文件，Node kit 提供 unified diff target safety helper：
+
+```ts
+import {
+  collectUnifiedDiffTargetFiles,
+  validateUnifiedDiffTargetFiles,
+} from "@web-annotation/node"
+
+// Enumerate the repository files a diff would touch (sorted, unique).
+collectUnifiedDiffTargetFiles(diff) // => { ok: true, files } | { ok: false, issues }
+
+// Reject any target outside the allow-list (e.g. a proposal's suggestedFiles).
+validateUnifiedDiffTargetFiles(diff, ["src/App.tsx"]) // => { ok, files } | { ok: false, issues }
+```
+
+它能解析 `diff --git a/… b/…` 扩展头和普通 `--- a/…` / `+++ b/…` 头，按 hunk 精确行数跳过正文，忽略 `/dev/null` 同时保留新增/删除文件的真实路径，并拒绝绝对路径、`..` 穿越和空文件名。
+
+## Platform Starter（接入 API）
+
+`apps/platform-starter` 是基于 Node 内置 `http` 和 Node 协议包的最小 HTTP 接入服务。它接收 payload、校验 payload、解析 safe-mode source、从配置的本地仓库收集源码片段、调用可选宿主 patch provider，并把任务存在内存中。它不内置模型 provider，也不使用数据库。
+
+本地运行：
+
+```sh
+pnpm --filter @web-annotation/platform-starter dev
+# defaults to http://localhost:4319 (override with PORT)
+```
+
+通过指向本地 checkout 启用 repo source-context 收集：
+
+```sh
+WEB_ANNOTATION_REPO_ROOT=/abs/path/to/your/repo pnpm --filter @web-annotation/platform-starter dev
+# REPO_ROOT is also supported when WEB_ANNOTATION_REPO_ROOT is not set.
+```
+
+当配置了 `repoRoot` 时，starter 会通过只读 `git -C <repoRoot> rev-parse HEAD` 读取当前仓库 `HEAD`，并写入导出 patch artifact 的既有 `project.commit` 字段。这样 CLI 可以在 apply 前做 base-commit preflight。starter 仍不会应用补丁、写文件、提交或推送。
+
+启用外部 HTTP patch provider：
+
+```sh
+WEB_ANNOTATION_PATCH_PROVIDER_URL=https://your-ai-backend.example.com/web-annotation/patch \
+WEB_ANNOTATION_PATCH_PROVIDER_TOKEN=server-side-provider-token \
+pnpm --filter @web-annotation/platform-starter dev
+```
+
+也可以启用内置 OpenAI-compatible model patch provider。`URL` 和 `MODEL` 都是必填，API key 可选且保留在服务端：
+
+```sh
+WEB_ANNOTATION_MODEL_PROVIDER_URL=https://api.openai.com/v1/chat/completions \
+WEB_ANNOTATION_MODEL_PROVIDER_MODEL=gpt-4o-mini \
+WEB_ANNOTATION_MODEL_PROVIDER_API_KEY=server-side-model-key \
+pnpm --filter @web-annotation/platform-starter dev
+```
+
+同一时间只能配置一个 patch provider。内存图片上传 provider 可用 `WEB_ANNOTATION_IMAGE_STORAGE=memory` 启用，仅适合本地开发/演示；真实部署应通过 `createPlatformServer({ imageStorageProvider })` 注入实际 provider。
+
+打开 `http://localhost:4319/console`（`/` 也会服务同一页面）即可使用任务控制台。控制台是单个静态 HTML 页面（原生 JS，无框架），支持中英文切换。它可以列出任务、查看 payload/prompt-context 详情、触发 source-context 收集、触发 provider/mock patch、渲染 source snippet 和 proposal、记录 review 决策，并展示导出的 patch artifact JSON。本地验证优先使用控制台，而不是手写 `curl`。
+
+主要端点：
+
+- `GET /` 或 `GET /console`：任务控制台 HTML。
+- `GET /health`：`{ ok: true }`。
+- `POST /api/annotations`：body 可以是裸 `AnnotationPayload v1`，也可以是 `{ payload, manifest }`。
+- `GET /api/tasks`：`{ tasks: TaskSummary[] }`。
+- `GET /api/tasks/:id`：`{ task }`。
+- `POST /api/tasks/:id/source-context`：按配置 repo root 收集源码片段。
+- `POST /api/tasks/:id/patch`：调用 `patchProvider.generatePatch({ task, promptContext, sourceContext })`。
+- `POST /api/tasks/:id/mock-patch`：生成幂等 mock patch proposal。
+- `POST /api/tasks/:id/patch-review`：记录 `{ decision: "accept" | "reject" | "changes_requested", reviewer?, note? }`。
+- `GET /api/tasks/:id/patch-artifact`：导出 `{ artifact }`，包含 `version: "web-annotation.patch-artifact.v1"`、任务元数据、prompt annotations、可选 source context、`patchProposal`、可选 `patchReview` 和安全标记。
+
+任务状态流转为 `received → patch_proposed → patch_accepted | patch_rejected | changes_requested`。`patchProposal` 包含 `summary`、`suggestedFiles`、`diffPreview`、`promptContext` 和可选 provider `metadata`。内置 mock 路径是确定性的，不读文件；provider 路径接收 `promptContext` 和已有 `sourceContext`，校验返回结果形状，并用 `validateUnifiedDiffTargetFiles` 确保 `diffPreview` 只触碰 `suggestedFiles` 中声明的文件。
+
+HTTP provider adapter 发送：
+
+```json
+{
+  "taskId": "task_...",
+  "task": {},
+  "promptContext": {},
+  "sourceContext": {}
+}
+```
+
+外部 provider 应返回：
+
+```json
+{
+  "summary": "Short proposal summary",
+  "suggestedFiles": ["src/App.tsx"],
+  "diffPreview": "--- a/src/App.tsx\n+++ b/src/App.tsx\n...",
+  "metadata": {
+    "provider": "your-provider"
+  }
+}
+```
+
+provider 结果契约是严格的：`summary` 和 `diffPreview` 必须是非空字符串，`suggestedFiles` 必须是非空字符串数组，`metadata` 存在时必须是对象。无效结果不会创建 proposal。
+
+`WEB_ANNOTATION_PATCH_PROVIDER_TOKEN` 只会由 Platform Starter 服务端作为 `Authorization: Bearer ...` 发给你的 provider，不会暴露给浏览器 Runtime SDK。
+
+服务端以工厂形式暴露，便于测试和嵌入：
+
+```ts
+import { createHttpPatchProvider, createPlatformServer } from "@web-annotation/platform-starter"
+
+const { server, store } = createPlatformServer({
+  repoRoot: "/abs/path/to/your/repo",
+  patchProvider: createHttpPatchProvider({
+    endpoint: "https://your-ai-backend.example.com/web-annotation/patch",
+    getAuthToken: async () => "server-side-provider-token"
+  })
+})
+server.listen(4319)
+```
+
+### HTTP Provider 示例和端到端 Smoke
+
+`examples/provider-http-mock`（`@web-annotation/example-provider-http-mock`）是一个可运行、轻依赖的第三方后端 provider 协议参考实现。它的 `createMockProviderServer()` 接收 `createHttpPatchProvider()` 发送的 `{ taskId, task, promptContext, sourceContext }`，并返回确定性、合法的 `PatchProviderResult`。
+
+单独运行并让 platform 指向它：
+
+```sh
+pnpm --filter @web-annotation/example-provider-http-mock start   # listens on http://localhost:4400
+WEB_ANNOTATION_PATCH_PROVIDER_URL=http://localhost:4400 pnpm --filter @web-annotation/platform-starter start
+```
+
+该包还提供端到端 smoke test：`pnpm --filter @web-annotation/example-provider-http-mock test`。测试会启动 mock provider，把它接入 `createHttpPatchProvider()`，提交 annotation，调用 `POST /api/tasks/:id/patch`，并验证 proposal 通过 provider-result 校验和 diff-target safety 校验，同时确认 `GET /api/tasks/:id/patch-artifact` 能导出下游可读 artifact。
+
+## CLI Pull、Preview、Dry-run、Check、Apply 和 Branch Commit
+
+`packages/annotation-cli`（`@web-annotation/cli`，bin 为 `web-annotation`）是面向 Platform Starter `GET /api/tasks/:id/patch-artifact` 导出的 `web-annotation.patch-artifact.v1` JSON artifact 的最小本地 CLI。它可以通过 HTTP 拉取 artifact、预览、执行 apply dry-run/preflight 和 patch-check、在显式确认后 apply，并创建显式本地分支/提交。它不会 push，也不会打开 PR/MR。
+
+```sh
+# build the CLI, then pull an exported artifact from a running Platform Starter
+pnpm --filter @web-annotation/cli build
+node packages/annotation-cli/dist/main.js pull <task-id> \
+  --base-url http://localhost:4319 --out ./artifact.json
+
+# preview a saved artifact
+node packages/annotation-cli/dist/main.js preview --file ./artifact.json
+
+# check whether the artifact is safe to plan against the current clean git repo
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --dry-run
+
+# verify the diff preview with git apply --check, still without writing files
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --check
+
+# apply the patch to the current working tree after explicit confirmation
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --yes
+
+# apply on a new local branch and create a local commit (no push, no PR)
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --yes \
+  --branch webannotation/task-example --commit --message "Apply reviewed patch"
+```
+
+`pull <task-id> --base-url <platform-url> --out <artifact.json>` 会请求 `<platform-url>/api/tasks/<task-id>/patch-artifact` 并把 artifact 保存到本地。`--base-url` 必须是 `http:` 或 `https:` URL。可选 `--token <token>` 会作为 `Authorization: Bearer <token>` 发送，且不会出现在任何输出或错误中。成功后只写裸 artifact JSON，不应用补丁、不运行 git、不创建分支/提交、不 push、不打开 PR/MR。
+
+`preview --file <artifact.json>` 会先校验 artifact 最小结构，再打印任务 id/status、project id、route、proposal summary、suggested files、review status 和 `diffPreview`。
+
+`apply --file <artifact.json> --dry-run` 会复用 artifact 校验并执行只读 git preflight：确认当前目录在 git 仓库中、读取 repo root，并要求 `git status --short` 为空。它还会校验每个 `patchProposal.suggestedFiles` 都是仓库相对路径。
+
+`apply --file <artifact.json> --check` 会继续执行 base commit 和 diff-target safety 检查，然后把 `patchProposal.diffPreview` 交给 `git apply --check`。该命令仍不会写文件或更新 git 状态。
+
+`apply --file <artifact.json> --yes` 是第一个会写入当前 working tree 的命令。它要求干净 git 仓库、路径合法、base commit 匹配、diff target 安全，并先运行 `git apply --check`，再运行 `git apply`。它不会 `git add`、创建分支、提交、push 或打开 PR/MR。
+
+`apply --file <artifact.json> --yes --branch <branch-name> --commit --message <commit-message>` 会把确认 apply 扩展成显式本地分支和提交。`--commit` 必须同时提供 `--branch` 和 `--message`。提交信息按原样使用，且会拒绝包含 `Co-Authored-By` 或 `Generated with` AI 署名 trailer 的 message。
+
+CLI 核心逻辑以纯函数形式暴露，便于嵌入和测试；`src/main.ts` 只负责 `process.argv`/`stdout`/`stderr`、真实 `fetch`、文件写入、只读 git 检查，以及显式确认后的 `git apply` / `git switch -c` / `git add` / `git commit` 写操作。push 和 PR/MR 交付仍在计划中。
+
+## Payload 形状
+
+Payload 示例：
+
+```json
+{
+  "version": "v1",
+  "project": {
+    "projectId": "web-console",
+    "environment": "staging"
+  },
+  "page": {
+    "url": "https://app.example.com/settings",
+    "route": "/settings",
+    "title": "Settings",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  "annotationGroup": {
+    "id": "group_...",
+    "mode": "single"
+  },
+  "annotations": [
+    {
+      "id": "anno_...",
+      "message": "Change this button text to Save settings",
+      "createdAt": "2026-06-28T00:00:00.000Z",
+      "target": {
+        "selector": "[data-annotation-id='el_...']",
+        "cssPath": "#save",
+        "tagName": "button",
+        "text": "Submit",
+        "rect": {
+          "x": 111,
+          "y": 319,
+          "width": 74,
+          "height": 34
+        },
+        "domSnapshot": "<button id=\"save\" data-annotation-id=\"el_...\">Submit</button>",
+        "source": {
+          "mode": "source",
+          "sourceId": "s_19cu8m6",
+          "file": "src/App.tsx",
+          "line": 25,
+          "column": 9,
+          "component": "App",
+          "framework": "react"
+        }
+      },
+      "attachments": [
+        {
+          "id": "att_…",
+          "kind": "image",
+          "name": "screenshot.png",
+          "mimeType": "image/png",
+          "size": 20480,
+          "width": 800,
+          "height": 600,
+          "storage": {
+            "provider": "server",
+            "objectKey": "uploads/screenshot.png",
+            "url": "https://cdn.example.com/uploads/screenshot.png"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+当没有构建插件、插件被禁用，或 runtime capture 设置 `sourceMetadata: "disabled"` 时，会省略 `source`。没有附加图片时会省略 `attachments`；它只携带上传引用（`storage.url`/`objectKey`），不会携带原始图片字节。
+
+## 计划中的生态
+
+```text
+packages/
+  annotation-core/       浏览器标注 Runtime SDK
+  annotation-vite/       当前 React 源码元数据 Vite 插件
+  annotation-node/       当前 Node 协议包：校验、source 解析、prompt context
+  annotation-cli/        当前本地 CLI：HTTP 拉取 artifact、preview、dry-run/check、
+                         显式 --yes apply，以及 branch + local commit
+
+apps/
+  platform-starter/      当前最小 HTTP 接入 API + 双语静态任务控制台
+                         + repo source-context collection
+examples/
+  playground/            当前本地 SDK 验证页
+  vite-react/            当前 React source metadata 验证页
+```
+
+## AI Patch 方向
+
+目标完整流程：
+
+```text
+select DOM -> write annotation -> submit payload -> backend stores task
+-> collect repo source context -> AI proposes patch -> human reviews
+-> PR/MR or CLI apply
+```
+
+浏览器 SDK 不包含模型 key、仓库 token 或后端 secret。AI 和仓库访问应放在配置好的后端或平台层。
+
+## 安全原则
+
+- 浏览器 SDK 不得包含模型 key、仓库 token 或后端 secret。
+- DOM snapshot 应在提交前清洗。
+- 生产源码元数据应默认使用 safe 或 disabled mode。
+- AI 生成的 patch 必须经过人工 review。
+- PR/MR 和 CLI 交付应校验仓库身份和 base commit。
+
+## 开发日志
+
+查看 [log.md](./log.md) 获取简要项目里程碑。
+
+## License
+
+尚未选择许可证。
+
+---
+
+<details>
+<summary>English README / 原英文内容</summary>
+
+# webAnnotation (English)
+
 AI-first web annotation toolkit for turning page feedback into structured code-change context.
 
 `webAnnotation` lets a host web app enter annotation mode, select a DOM element, write a note, and submit an `AnnotationPayload v1` to a configured backend. The long-term goal is to connect those payloads to AI patch generation, PR/MR review, and local CLI patch workflows.
 
 > Status: early MVP in development. The runtime SDK, React source metadata Vite plugin, Node protocol kit, CLI, and local examples exist in this repository. The publishable packages are available on npm at `0.1.0`. The `apps/platform-starter` app and the `examples/*` packages are intentionally private and are not published.
+
+## 功能流程调用图
+
+![webAnnotation Q版功能流程调用图](docs/assets/webannotation-flow-chibi.png)
+
+调用主链路：业务页面挂载 `Runtime SDK` 创建标注，`@web-annotation/vite`
+在构建期注入源码元数据，SDK 组装 `AnnotationPayload v1` 后提交给
+`Platform API`；平台侧通过 `@web-annotation/node` 校验、补全 source
+manifest、构建 patch prompt context，并在需要时收集仓库源码片段；随后
+`Patch Provider` 生成补丁建议，人工 review 后导出 patch artifact，最后由
+`@web-annotation/cli` 在本地执行 dry-run/check/apply/branch commit 流程。
 
 ## Current MVP
 
@@ -607,3 +1233,5 @@ See [log.md](./log.md) for concise project milestones.
 ## License
 
 License is not selected yet.
+
+</details>

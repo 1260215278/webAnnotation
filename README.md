@@ -19,6 +19,308 @@ manifest、构建 patch prompt context，并在需要时收集仓库源码片段
 `Patch Provider` 生成补丁建议，人工 review 后导出 patch artifact，最后由
 `@web-annotation/cli` 在本地执行 dry-run/check/apply/branch commit 流程。
 
+## 快速开始
+
+这条教程从本地跑通开始，再过渡到把 SDK 接入你自己的 Web 应用。完成后你可以看到：
+
+- 浏览器里选中 DOM 元素并提交一条 annotation。
+- payload 中包含页面、元素、DOM snapshot、可选源码位置和可选图片附件引用。
+- Platform Starter 接收任务、展示任务详情、收集源码上下文、生成 mock patch。
+- CLI 拉取导出的 patch artifact，并做 preview / dry-run / check。
+
+### 0. 准备环境
+
+需要 Node.js `>=18`，包管理器使用仓库声明的 `pnpm@11.7.0`。
+
+```sh
+pnpm install
+```
+
+如果只是体验浏览器 SDK，可以直接看第 1 步；如果要跑完整任务控制台和 CLI artifact 流程，建议在一个干净的 Git 工作区中操作，因为 CLI 的 apply dry-run/check 会检查仓库状态。
+
+### 1. 先跑通最小 Playground
+
+启动不依赖后端的浏览器示例：
+
+```sh
+pnpm example
+```
+
+打开终端打印的本地 URL 后：
+
+1. 点击页面里的 `Enable annotation` 或悬浮标注入口。
+2. 鼠标移动到页面元素上，看到 hover 高亮后点击元素锁定目标。
+3. 在弹出的输入框里填写反馈，例如 `把这个按钮文案改成保存`。
+4. 按 `Enter` 提交；如需换行，按 `Shift+Enter`。
+5. 页面下方会显示提交出来的 `AnnotationPayload v1` JSON。
+
+这个 playground 使用 `submitAnnotation` 本地回调，不会请求真实后端；图片附件也使用 demo-only uploader，只返回一个模拟存储引用。它适合先确认 SDK 的交互、payload 结构和图片附件行为。
+
+### 2. 跑通 React 源码定位示例
+
+如果你的项目是 Vite + React，先运行带源码元数据的示例：
+
+```sh
+pnpm example:react
+```
+
+提交 annotation 后，查看页面中的 payload。正常情况下，`annotations[].target.source` 会包含类似下面的字段：
+
+```json
+{
+  "mode": "source",
+  "sourceId": "s_...",
+  "file": "src/App.tsx",
+  "line": 25,
+  "column": 9,
+  "component": "App",
+  "framework": "react"
+}
+```
+
+这一步验证的是 `@web-annotation/vite` 能把页面上的 DOM 元素映射回源码位置。当前只支持 Vite + React JSX/TSX；Vue SFC 仍在计划中。
+
+### 3. 启动 Platform Starter 控制台
+
+再开一个终端，启动最小接入服务和任务控制台：
+
+```sh
+WEB_ANNOTATION_REPO_ROOT=$PWD \
+WEB_ANNOTATION_IMAGE_STORAGE=memory \
+pnpm --filter @web-annotation/platform-starter dev
+```
+
+启动后会打印：
+
+- 接入 API：`http://localhost:4319`
+- 任务控制台：`http://localhost:4319/console`
+
+这里的环境变量含义：
+
+- `WEB_ANNOTATION_REPO_ROOT=$PWD`：允许平台按 payload 中的 source 信息读取当前仓库源码片段。
+- `WEB_ANNOTATION_IMAGE_STORAGE=memory`：启用内存图片存储，只适合本地开发/演示。
+
+如果只是接收 annotation，不需要马上生成真实 AI patch，可以不配置 patch provider；控制台仍然可以生成 deterministic mock patch。
+
+### 4. 在业务项目里接入 Runtime SDK
+
+在你的 Web 应用里安装浏览器 SDK：
+
+```sh
+pnpm add @web-annotation/core
+```
+
+最小接入方式是把 payload 交给你自己的提交逻辑：
+
+```ts
+import { createAnnotator } from "@web-annotation/core"
+
+const annotator = createAnnotator({
+  projectId: "my-app",
+  environment: "local",
+  locale: "zh",
+  capture: {
+    domSnapshot: true
+  },
+  submitAnnotation: async (payload) => {
+    await fetch("/api/annotations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    })
+  }
+})
+
+annotator.mountWidget()
+```
+
+如果你正在本地使用 Platform Starter，可以直接把 SDK 指向它：
+
+```ts
+const annotator = createAnnotator({
+  projectId: "my-app",
+  environment: "local",
+  locale: "zh",
+  endpoint: "http://localhost:4319/api/annotations",
+  capture: {
+    domSnapshot: true
+  }
+})
+
+annotator.mountWidget()
+```
+
+`mountWidget()` 会挂载内置悬浮入口；如果你希望由自己的按钮控制标注模式，可以改用：
+
+```ts
+button.addEventListener("click", () => {
+  if (annotator.isEnabled()) {
+    annotator.disable()
+  } else {
+    annotator.enable()
+  }
+})
+```
+
+提交优先级规则：配置了 `submitAnnotation` 时优先走自定义提交；否则走 `endpoint`。两者都不配置时，提交 annotation 会报配置错误。
+
+### 5. 可选：开启图片附件
+
+如果需要让用户在标注时附加截图或图片，启用 `attachments.images`，并提供上传方式。使用 Platform Starter 本地上传接口时可以这样配置：
+
+```ts
+const annotator = createAnnotator({
+  projectId: "my-app",
+  environment: "local",
+  locale: "zh",
+  endpoint: "http://localhost:4319/api/annotations",
+  capture: {
+    domSnapshot: true
+  },
+  attachments: {
+    images: true,
+    maxImages: 4,
+    maxImageBytes: 5 * 1024 * 1024,
+    uploadEndpoint: "http://localhost:4319/api/uploads/images"
+  }
+})
+```
+
+生产环境更常见的做法是自己实现 `uploadImage`，把图片上传到服务端或对象存储，再返回存储引用：
+
+```ts
+const annotator = createAnnotator({
+  projectId: "my-app",
+  submitAnnotation,
+  attachments: {
+    images: true,
+    uploadImage: async (file) => {
+      const res = await uploadToYourStorage(file)
+      return {
+        id: res.id,
+        kind: "image",
+        name: file.name,
+        mimeType: file.type,
+        size: file.size,
+        storage: {
+          provider: "oss",
+          objectKey: res.objectKey,
+          url: res.url
+        }
+      }
+    }
+  }
+})
+```
+
+无论使用哪种上传方式，最终 annotation payload 都只包含上传后的 `storage` 引用，不会携带 `base64` 或原始图片字节。
+
+### 6. 可选：接入 Vite 源码元数据
+
+如果业务项目是 Vite + React，安装并配置 Vite 插件：
+
+```sh
+pnpm add -D @web-annotation/vite
+```
+
+```ts
+// vite.config.ts
+import { defineConfig } from "vite"
+import react from "@vitejs/plugin-react"
+import { annotationPlugin } from "@web-annotation/vite"
+
+export default defineConfig({
+  plugins: [
+    annotationPlugin({
+      mode: "source"
+    }),
+    react()
+  ]
+})
+```
+
+模式选择：
+
+- `source`：浏览器 payload 直接带 `file`、`line`、`column`、`component` 等信息，适合本地和内网调试。
+- `safe`：浏览器 payload 只带 `sourceId`，真实源码路径通过 manifest 留在可信后端。
+- `disabled`：不注入源码元数据，SDK 仍会用 selector、CSS path 和 DOM snapshot 工作。
+
+如果使用 `safe`，需要把 `onManifest` 拿到的 manifest 存到后端，并在收到 payload 后用 `@web-annotation/node` 的 `resolvePayloadSources(payload, manifest)` 补全源码位置。
+
+### 7. 在控制台处理任务
+
+打开：
+
+```text
+http://localhost:4319/console
+```
+
+在控制台里按顺序检查：
+
+1. 任务列表是否出现刚提交的 annotation。
+2. 任务详情里是否有 `promptContext` 和 annotation 目标信息。
+3. 如果已配置 `WEB_ANNOTATION_REPO_ROOT`，点击 source-context 操作，确认能读取相关源码片段。
+4. 没有真实 patch provider 时，点击 mock patch，生成 deterministic patch proposal。
+5. 根据 proposal 内容记录 `accept`、`reject` 或 `changes_requested`。
+6. 在任务详情里查看导出的 patch artifact JSON。
+
+Platform Starter 本身不会写业务仓库、不会执行 `git apply`、不会提交或推送；它只保存任务、生成/接收补丁建议和导出 artifact。
+
+### 8. 用 CLI 拉取和预览 artifact
+
+先构建 CLI：
+
+```sh
+pnpm --filter @web-annotation/cli build
+```
+
+把 `<task-id>` 替换成控制台里的任务 ID：
+
+```sh
+node packages/annotation-cli/dist/main.js pull <task-id> \
+  --base-url http://localhost:4319 \
+  --out ./artifact.json
+```
+
+预览 artifact：
+
+```sh
+node packages/annotation-cli/dist/main.js preview --file ./artifact.json
+```
+
+在当前仓库做只读 apply 预检：
+
+```sh
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --dry-run
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --check
+```
+
+只有在你已经 review 过 diff，并确认要写入当前工作区时，才使用：
+
+```sh
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --yes
+```
+
+如果要在新分支上应用并创建本地提交：
+
+```sh
+node packages/annotation-cli/dist/main.js apply --file ./artifact.json --yes \
+  --branch webannotation/task-example \
+  --commit \
+  --message "Apply reviewed patch"
+```
+
+CLI 不会 push，也不会创建 PR/MR。`--yes` 是写入工作区的明确确认；`--commit` 还必须同时提供 `--branch` 和 `--message`。
+
+### 9. 常见排查
+
+- 提交时报配置错误：确认 `submitAnnotation` 或 `endpoint` 至少配置了一个。
+- 控制台没有任务：确认 SDK 的 `endpoint` 是 `http://localhost:4319/api/annotations`，并检查浏览器 Network 面板。
+- 图片上传返回 `409`：确认 Platform Starter 启动时设置了 `WEB_ANNOTATION_IMAGE_STORAGE=memory`，或在生产环境注入了真实 `ImageStorageProvider`。
+- source-context 返回 `409`：确认启动平台时设置了 `WEB_ANNOTATION_REPO_ROOT` 或 `REPO_ROOT`。
+- payload 里没有 `target.source`：确认使用的是 Vite + React JSX/TSX，且 `annotationPlugin({ mode: "source" })` 在 Vite 配置中启用。
+- CLI dry-run 失败：确认当前目录在 Git 仓库内，工作区干净，并且 artifact 中的 base commit 与当前 `HEAD` 匹配。
+
 ## 当前 MVP
 
 仓库当前包含：

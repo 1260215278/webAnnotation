@@ -1,7 +1,9 @@
 {
   "name": "@web-annotation/node",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Node-side protocol kit: validate annotation payloads, resolve safe-mode sources, and build AI patch prompt context.",
+  "license": "MIT",
+  "author": "markss",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -14,8 +16,34 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
+  "sideEffects": false,
+  "keywords": [
+    "web-annotation",
+    "annotation",
+    "protocol",
+    "validation",
+    "node",
+    "ai",
+    "patch"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1260215278/webAnnotation.git",
+    "directory": "packages/annotation-node"
+  },
+  "homepage": "https://github.com/1260215278/webAnnotation#readme",
+  "bugs": {
+    "url": "https://github.com/1260215278/webAnnotation/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",

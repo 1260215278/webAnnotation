@@ -1,7 +1,9 @@
 {
   "name": "@web-annotation/vite",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Vite plugin that injects React source metadata for web annotation.",
+  "license": "MIT",
+  "author": "markss",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -14,8 +16,32 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
+  "keywords": [
+    "web-annotation",
+    "vite-plugin",
+    "vite",
+    "react",
+    "source-metadata",
+    "annotation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1260215278/webAnnotation.git",
+    "directory": "packages/annotation-vite"
+  },
+  "homepage": "https://github.com/1260215278/webAnnotation#readme",
+  "bugs": {
+    "url": "https://github.com/1260215278/webAnnotation/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",

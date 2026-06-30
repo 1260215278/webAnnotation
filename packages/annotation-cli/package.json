@@ -1,8 +1,9 @@
 {
   "name": "@web-annotation/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Local CLI for previewing webAnnotation patch artifacts.",
-  "private": true,
+  "license": "MIT",
+  "author": "markss",
   "type": "module",
   "bin": {
     "web-annotation": "./dist/main.js"
@@ -18,8 +19,31 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
+  "keywords": [
+    "web-annotation",
+    "cli",
+    "patch",
+    "diff",
+    "annotation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1260215278/webAnnotation.git",
+    "directory": "packages/annotation-cli"
+  },
+  "homepage": "https://github.com/1260215278/webAnnotation#readme",
+  "bugs": {
+    "url": "https://github.com/1260215278/webAnnotation/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",

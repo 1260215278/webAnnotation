@@ -29,6 +29,9 @@ export const CONSOLE_MESSAGES = {
     targetField: "Target",
     selectorField: "Selector",
     sourceField: "Source",
+    attachmentsHeading: "Attachments",
+    attachmentOpenLink: "Open image",
+    bytesLabel: "bytes",
     sourceContextLabel: "source context",
     sourceContextHeading: "Source context",
     sourceContextNotCollected: "Source context has not been collected for this task.",
@@ -86,6 +89,9 @@ export const CONSOLE_MESSAGES = {
     targetField: "目标",
     selectorField: "选择器",
     sourceField: "源码",
+    attachmentsHeading: "附件",
+    attachmentOpenLink: "打开图片",
+    bytesLabel: "字节",
     sourceContextLabel: "源码上下文",
     sourceContextHeading: "源码上下文",
     sourceContextNotCollected: "当前任务尚未收集源码上下文。",
@@ -152,6 +158,8 @@ export function renderConsoleHtml(): string {
     button.task-link { width: 100%; text-align: left; font-weight: 600; }
     button.primary { background: #2563eb22; border-color: #2563eb88; }
     .annotation { border: 1px solid #8883; border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+    .attachment { display: flex; gap: 0.5rem; align-items: center; margin: 0.35rem 0; font-size: 0.85rem; }
+    .attachment-thumb { width: 96px; height: 72px; object-fit: cover; border-radius: 4px; border: 1px solid #8883; }
     p { margin: 0.25rem 0; }
     pre.diff, pre.source { background: #8881; border-radius: 6px; padding: 0.75rem; overflow: auto; font-size: 0.8rem; }
     .source-file { border: 1px solid #8883; border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
@@ -259,6 +267,38 @@ export function renderConsoleHtml(): string {
       selectedTask = null;
       detailEl.textContent = t('selectTask');
     }
+    function isSafeUrl(value) {
+      if (!value || typeof value !== 'string') return false;
+      return /^https?:\\/\\//i.test(value) || value.charAt(0) === '/';
+    }
+    function renderAttachments(box, attachments) {
+      box.appendChild(el('strong', t('attachmentsHeading') + ':'));
+      attachments.forEach(function (att) {
+        var row = el('div');
+        row.className = 'attachment';
+        var safeUrl = att.storage && isSafeUrl(att.storage.url) ? att.storage.url : '';
+        if (safeUrl) {
+          var img = el('img');
+          img.className = 'attachment-thumb';
+          img.src = safeUrl;
+          img.alt = att.name;
+          row.appendChild(img);
+        }
+        var meta = el('div');
+        meta.appendChild(el('div', att.name + ' (' + att.mimeType + ', ' + att.size + ' ' + t('bytesLabel') + ')'));
+        if (safeUrl) {
+          var link = el('a', t('attachmentOpenLink'));
+          link.href = safeUrl;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          meta.appendChild(link);
+        } else if (att.storage && att.storage.objectKey) {
+          meta.appendChild(el('div', att.storage.objectKey));
+        }
+        row.appendChild(meta);
+        box.appendChild(row);
+      });
+    }
 
     function loadTasks() {
       clearError();
@@ -356,6 +396,9 @@ export function renderConsoleHtml(): string {
             : '(safe: ' + a.source.sourceId + ')';
           if (a.source.component) loc += ' · ' + a.source.component;
           box.appendChild(field(t('sourceField'), loc));
+        }
+        if (a.attachments && a.attachments.length) {
+          renderAttachments(box, a.attachments);
         }
         detailEl.appendChild(box);
       });

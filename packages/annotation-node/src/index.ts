@@ -22,6 +22,8 @@ export type {
   PatchPromptAnnotation,
   PatchPromptTarget,
   PatchPromptSource,
+  PatchPromptImageAttachment,
+  PatchPromptImageAttachmentStorage,
   BuildPatchPromptContextOptions,
 } from "./types"
 

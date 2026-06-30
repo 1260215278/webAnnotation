@@ -1,4 +1,5 @@
 import type {
+  AnnotationAttachment,
   AnnotationItem,
   AnnotationPayload,
   AnnotationTarget,
@@ -23,17 +24,22 @@ export function buildPageInfo(win: Window): PageInfo {
 export interface BuildAnnotationItemInput {
   message: string
   target: AnnotationTarget
+  attachments?: AnnotationAttachment[]
   id?: string
   createdAt?: string
 }
 
 export function buildAnnotationItem(input: BuildAnnotationItemInput): AnnotationItem {
-  return {
+  const item: AnnotationItem = {
     id: input.id ?? createId("anno"),
     message: input.message,
     target: input.target,
     createdAt: input.createdAt ?? new Date().toISOString(),
   }
+  if (input.attachments && input.attachments.length > 0) {
+    item.attachments = input.attachments
+  }
+  return item
 }
 
 export interface BuildPayloadInput {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { buildPatchPromptContext } from "../src/index"
-import { makeSourcePayload } from "./fixtures"
+import { makeImageAttachment, makeSourcePayload } from "./fixtures"
 
 describe("buildPatchPromptContext", () => {
   it("produces a deterministic, serializable summary", () => {
@@ -54,5 +54,34 @@ describe("buildPatchPromptContext", () => {
     delete payload.annotations[0].target.source
     const context = buildPatchPromptContext(payload)
     expect(context.annotations[0].source).toBeUndefined()
+  })
+
+  it("summarizes image attachments without raw content", () => {
+    const payload = makeSourcePayload()
+    payload.annotations[0].attachments = [makeImageAttachment()]
+    const context = buildPatchPromptContext(payload)
+    expect(context.annotations[0].attachments).toEqual([
+      {
+        id: "att_1",
+        kind: "image",
+        name: "screenshot.png",
+        mimeType: "image/png",
+        size: 20480,
+        width: 800,
+        height: 600,
+        storage: {
+          provider: "server",
+          url: "https://cdn.example.com/uploads/att_1.png",
+          objectKey: "uploads/att_1.png",
+        },
+      },
+    ])
+    // The host-only metadata is dropped from prompt context.
+    expect(JSON.stringify(context)).not.toContain("uploadedBy")
+  })
+
+  it("omits attachments when the annotation has none", () => {
+    const context = buildPatchPromptContext(makeSourcePayload())
+    expect(context.annotations[0].attachments).toBeUndefined()
   })
 })

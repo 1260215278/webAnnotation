@@ -1,8 +1,15 @@
-import type { AnnotationItem, AnnotationPayload, SourceMetadata } from "@web-annotation/core"
+import type {
+  AnnotationImageAttachment,
+  AnnotationItem,
+  AnnotationPayload,
+  SourceMetadata,
+} from "@web-annotation/core"
 import type {
   BuildPatchPromptContextOptions,
   PatchPromptAnnotation,
   PatchPromptContext,
+  PatchPromptImageAttachment,
+  PatchPromptImageAttachmentStorage,
   PatchPromptSource,
   PatchPromptTarget,
 } from "./types"
@@ -25,6 +32,24 @@ function summarizeSource(source: SourceMetadata): PatchPromptSource {
   return out
 }
 
+function summarizeAttachment(att: AnnotationImageAttachment): PatchPromptImageAttachment {
+  const storage: PatchPromptImageAttachmentStorage = { provider: att.storage.provider }
+  if (att.storage.url !== undefined) storage.url = att.storage.url
+  if (att.storage.objectKey !== undefined) storage.objectKey = att.storage.objectKey
+
+  const summary: PatchPromptImageAttachment = {
+    id: att.id,
+    kind: att.kind,
+    name: att.name,
+    mimeType: att.mimeType,
+    size: att.size,
+    storage,
+  }
+  if (att.width !== undefined) summary.width = att.width
+  if (att.height !== undefined) summary.height = att.height
+  return summary
+}
+
 function summarizeAnnotation(anno: AnnotationItem, maxDomSnapshot: number): PatchPromptAnnotation {
   const target: PatchPromptTarget = {
     selector: anno.target.selector,
@@ -44,6 +69,9 @@ function summarizeAnnotation(anno: AnnotationItem, maxDomSnapshot: number): Patc
   }
   if (anno.target.source !== undefined) {
     result.source = summarizeSource(anno.target.source)
+  }
+  if (anno.attachments !== undefined && anno.attachments.length > 0) {
+    result.attachments = anno.attachments.map(summarizeAttachment)
   }
   return result
 }

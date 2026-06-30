@@ -1,5 +1,24 @@
-import type { AnnotationPayload } from "@web-annotation/core"
+import type { AnnotationImageAttachment, AnnotationPayload } from "@web-annotation/core"
 import type { SourceManifest } from "../src/types"
+
+/** A fully valid uploaded image attachment (reference only, no raw bytes). */
+export function makeImageAttachment(): AnnotationImageAttachment {
+  return {
+    id: "att_1",
+    kind: "image",
+    name: "screenshot.png",
+    mimeType: "image/png",
+    size: 20480,
+    width: 800,
+    height: 600,
+    storage: {
+      provider: "server",
+      url: "https://cdn.example.com/uploads/att_1.png",
+      objectKey: "uploads/att_1.png",
+    },
+    metadata: { uploadedBy: "host" },
+  }
+}
 
 /** A fully valid `AnnotationPayload v1` in `source` mode, used across tests. */
 export function makeSourcePayload(): AnnotationPayload {

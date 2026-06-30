@@ -4,7 +4,7 @@ AI-first web annotation toolkit for turning page feedback into structured code-c
 
 `webAnnotation` lets a host web app enter annotation mode, select a DOM element, write a note, and submit an `AnnotationPayload v1` to a configured backend. The long-term goal is to connect those payloads to AI patch generation, PR/MR review, and local CLI patch workflows.
 
-> Status: early MVP in development. The runtime SDK, React source metadata Vite plugin, Node protocol kit, and local examples exist in this repository; npm packages are not published yet.
+> Status: early MVP in development. The runtime SDK, React source metadata Vite plugin, Node protocol kit, CLI, and local examples exist in this repository. The publishable packages are configured and prepared for their first npm release (`0.1.0`) but are **not published to npm yet** as of this commit. The `apps/platform-starter` app and the `examples/*` packages are intentionally private and are not published.
 
 ## Current MVP
 
@@ -30,6 +30,8 @@ The SDK currently supports:
 - `endpoint` + optional `getAuthToken()` POST submission.
 - `AnnotationPayload v1` with project, page, target selector, CSS path, element text, rect, and sanitized DOM snapshot.
 - Optional `target.source` when source metadata has been injected by the Vite plugin.
+- Optional image attachments: select images in the popup, preview thumbnails, remove them, and see per-image uploading/failed status; images are uploaded before the annotation is submitted (`uploadImage` host hook or a JSON/base64 `uploadEndpoint`), and the payload carries only the uploaded reference — never raw image bytes.
+- A small built-in locale mechanism (`locale: "zh" | "en"`, auto-detected from `navigator.language`) for all popup/widget text.
 
 The Vite plugin currently supports:
 
@@ -47,11 +49,14 @@ The Node protocol kit currently supports:
 - `resolvePayloadSources(payload, manifest)`: enrich safe-mode payloads from a trusted manifest without mutating the input.
 - `buildPatchPromptContext(payload, options?)`: a deterministic, serializable summary for AI patch prompts.
 - `collectRepoSourceContext(promptContext, options)`: safely read repo source snippets referenced by `source.file`/`line`, with path-traversal/oversize/binary protection and readable issues.
+- Image attachment validation in `validateAnnotationPayload`: each `annotations[].attachments[]` image is checked for `kind: "image"`, a non-empty `id`/`name`, an allow-listed `mimeType` (`image/png`, `image/jpeg`, `image/webp`, `image/gif`), a positive-integer `size`, optional positive-integer `width`/`height`, a `storage` reference (`provider` plus a non-empty `url` or `objectKey`), and rejection of any raw-content field (`data`/`base64`/`content`/…). `buildPatchPromptContext` adds a deterministic per-annotation image summary (name, type, size, dimensions, storage reference) — never raw image content.
 
 The Platform Starter ingest API currently supports:
 
 - `GET /health`: liveness check.
 - `POST /api/annotations`: validate a payload (optionally `{ payload, manifest }`), resolve safe-mode sources, store a task, and return `{ taskId, status }`.
+- `POST /api/uploads/images`: a minimal JSON/base64 image upload endpoint. Strictly validates the MIME type (`image/png`/`jpeg`/`webp`/`gif`), valid base64, that the bytes are actually an image whose magic bytes match the declared type, and a 5 MiB default size cap; rejects oversized uploads with `413` and bad input with `400`. Stores via the injected `ImageStorageProvider` and returns `{ attachment }` (a stored reference, no raw bytes). Returns `409` when no storage provider is configured. The browser SDK uploads here before submitting the annotation.
+- `GET /api/uploads/images/<objectKey>`: serve the bytes of an image stored by a provider that supports retrieval (the in-memory provider does), so console thumbnails resolve. Returns `404` when the object key is unknown or no retrievable provider is configured.
 - `GET /api/tasks`: list task summaries (including `status`, source-context counts, any `patchProposalId`, and any `patchReviewStatus`).
 - `GET /api/tasks/:id`: fetch task detail, including the generated prompt context, any source context, patch proposal, and patch review.
 - `POST /api/tasks/:id/source-context`: collect repository source snippets for a task when the server is configured with a repo root.
@@ -61,17 +66,37 @@ The Platform Starter ingest API currently supports:
 - `GET /api/tasks/:id/patch-artifact`: export a `web-annotation.patch-artifact.v1` JSON artifact for downstream CLI/Git/AI apply workflows (export only; never writes files). When `repoRoot` is configured the artifact's existing `project.commit` field carries the current repo `HEAD`, so the CLI can run a base-commit preflight.
 - `GET /` and `GET /console`: a minimal bilingual static-HTML task console for browsing tasks, viewing details, collecting source context, triggering provider/mock patches, reviewing proposals, and viewing patch artifacts.
 - `createHttpPatchProvider(options)`: a generic HTTP adapter for connecting an external AI/custom patch service.
-- Shared patch-provider result runtime validation for both direct injected providers and the HTTP provider adapter.
+- `createOpenAICompatiblePatchProvider(options)`: an OpenAI-compatible chat-completions patch provider. It uses an injectable `fetch` (no real SDK, no outbound calls in tests), requires an explicit `endpoint` and `model` (never guessed), keeps any `apiKey`/`getApiKey` server-side and redacts it from errors, sends the task / prompt context / source context / image-attachment digest as a JSON message, and only accepts the declared `{ summary, suggestedFiles, diffPreview, metadata? }` JSON result (validated, no fallback guessing).
+- `ImageStorageProvider` interface with a built-in `createMemoryImageStorage()` test provider. A host injects a real provider (e.g. an OSS-backed one) so an object store can be used without exposing any secret to the browser.
+- Shared patch-provider result runtime validation for both direct injected providers and the HTTP/model provider adapters.
+- Bilingual task console rendering of image attachment thumbnails/links per annotation (safe `http(s)`/relative URLs only).
 - In-memory task store behind a `TaskStore` interface, and a testable `createPlatformServer()` factory.
 
 Still planned:
 
 - Screenshot capture.
 - Vue SFC source metadata injection.
-- Model-specific provider adapters and a production-grade task-console workflow.
+- Additional model-specific provider adapters and a production-grade task-console workflow (one OpenAI-compatible adapter exists today).
+- A production object-store (e.g. OSS) `ImageStorageProvider` implementation.
+- Browser/server detection of image `width`/`height` for the built-in JSON/base64 upload path (today they are populated only when the host's `uploadImage` or upload server supplies them; the field is optional).
 - Persistent storage for the platform.
 - CLI push and PR/MR delivery (the CLI currently pulls an exported artifact over HTTP, previews artifacts, runs apply dry-run/preflight, checks patch applicability, applies to the working tree with explicit confirmation, and can apply on a new local branch with a local commit).
-- npm publishing.
+- The first npm release: the `@web-annotation/core`, `/node`, `/vite`, and `/cli` packages are configured for publish (license, metadata, `publishConfig.access: public`, build artifacts) and pass `pnpm publish --dry-run`, but the actual first publish to npm has not happened yet.
+
+## Install From npm
+
+> These packages are prepared for their first publish (`0.1.0`) but are **not on
+> npm yet** as of this commit. Once published, install the ones you need:
+
+```sh
+pnpm add @web-annotation/core       # browser Runtime SDK
+pnpm add @web-annotation/node       # Node-side protocol kit
+pnpm add -D @web-annotation/vite    # Vite plugin (React source metadata)
+pnpm dlx @web-annotation/cli --help # patch-artifact CLI (run without installing)
+```
+
+The `apps/platform-starter` app and the `examples/*` packages are private and are
+not published; clone this repository to run them.
 
 ## Install Locally
 
@@ -171,6 +196,38 @@ interface AnnotatorOptions {
 `submitAnnotation` takes precedence over `endpoint`. If neither is provided, submitting an annotation throws a configuration error.
 
 `capture.screenshot` is reserved for a planned package. `capture.sourceMetadata` defaults to `"auto"` and reads metadata only when a build plugin has injected it into the DOM.
+
+### Image Attachments
+
+Enable image attachments in the annotation popup with `attachments.images`. Provide an uploader: `uploadImage` (full host control — e.g. upload to OSS and return the stored metadata) takes precedence over `uploadEndpoint` (a JSON/base64 upload that returns `{ attachment }`). Images are uploaded before the annotation is submitted; if any upload fails the annotation is not submitted, and the user can remove the failed image and resubmit. The payload only ever carries the uploaded reference, never raw image bytes.
+
+```ts
+const annotator = createAnnotator({
+  projectId: "web-console",
+  submitAnnotation: async (payload) => { /* ... */ },
+  locale: "zh", // optional; auto-detected from navigator.language otherwise
+  attachments: {
+    images: true,
+    maxImages: 4,                 // default 4
+    maxImageBytes: 5 * 1024 * 1024, // default 5 MiB
+    acceptedImageTypes: ["image/png", "image/jpeg", "image/webp", "image/gif"], // default
+
+    // Option A: full host control (e.g. upload to OSS, return the reference).
+    uploadImage: async (file, context) => ({
+      id: "att_…",
+      kind: "image",
+      name: file.name,
+      mimeType: file.type,
+      size: file.size,
+      storage: { provider: "oss", objectKey: "uploads/…", url: "https://cdn…/…" }
+    }),
+
+    // Option B: JSON/base64 endpoint (e.g. the Platform Starter upload route).
+    // uploadEndpoint: "https://your-api.example.com/api/uploads/images",
+    // getUploadAuthToken: async () => "short-lived-token"
+  }
+})
+```
 
 ## Vite Plugin Usage
 
@@ -294,6 +351,17 @@ pnpm --filter @web-annotation/platform-starter dev
 ```
 
 `PATCH_PROVIDER_TOKEN` is also supported when `WEB_ANNOTATION_PATCH_PROVIDER_TOKEN` is not set.
+
+Alternatively, enable the built-in OpenAI-compatible model patch provider (both `URL` and `MODEL` are required; the API key is optional and stays server-side):
+
+```sh
+WEB_ANNOTATION_MODEL_PROVIDER_URL=https://api.openai.com/v1/chat/completions \
+WEB_ANNOTATION_MODEL_PROVIDER_MODEL=gpt-4o-mini \
+WEB_ANNOTATION_MODEL_PROVIDER_API_KEY=server-side-model-key \
+pnpm --filter @web-annotation/platform-starter dev
+```
+
+Only one patch provider may be configured: setting both `WEB_ANNOTATION_PATCH_PROVIDER_URL` and `WEB_ANNOTATION_MODEL_PROVIDER_URL` fails loudly at startup, and setting `WEB_ANNOTATION_MODEL_PROVIDER_URL` without `WEB_ANNOTATION_MODEL_PROVIDER_MODEL` also fails. Enable the in-memory image upload provider (local development/demos only) with `WEB_ANNOTATION_IMAGE_STORAGE=memory`; a real deployment injects an `ImageStorageProvider` via `createPlatformServer({ imageStorageProvider })` instead.
 
 Then open the task console at `http://localhost:4319/console` (also served at `/`). The console is a single static HTML page (vanilla JS, no framework) with Chinese/English UI switching. It lists tasks, shows a task's payload/prompt-context detail, triggers source-context collection, triggers provider-backed `patch` or deterministic `mock-patch` for tasks without a proposal, renders source snippets, source issues, proposal `summary`, `suggestedFiles`, and `diffPreview`, records review decisions, and displays exported patch artifact JSON. Use it for local verification instead of `curl`.
 
@@ -472,13 +540,29 @@ Payload example:
           "component": "App",
           "framework": "react"
         }
-      }
+      },
+      "attachments": [
+        {
+          "id": "att_…",
+          "kind": "image",
+          "name": "screenshot.png",
+          "mimeType": "image/png",
+          "size": 20480,
+          "width": 800,
+          "height": 600,
+          "storage": {
+            "provider": "server",
+            "objectKey": "uploads/screenshot.png",
+            "url": "https://cdn.example.com/uploads/screenshot.png"
+          }
+        }
+      ]
     }
   ]
 }
 ```
 
-`source` is omitted when no build plugin is present, when the plugin is disabled, or when runtime capture sets `sourceMetadata: "disabled"`.
+`source` is omitted when no build plugin is present, when the plugin is disabled, or when runtime capture sets `sourceMetadata: "disabled"`. `attachments` is omitted when no images were attached; it only ever carries an uploaded reference (`storage.url`/`objectKey`), never raw image bytes.
 
 ## Planned Ecosystem
 

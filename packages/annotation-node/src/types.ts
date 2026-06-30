@@ -1,4 +1,8 @@
-import type { AnnotationPayload, SourceMetadata } from "@web-annotation/core"
+import type {
+  AnnotationPayload,
+  ImageAttachmentProvider,
+  SourceMetadata,
+} from "@web-annotation/core"
 
 /** A single, human-readable validation problem with a JSON-path-like location. */
 export interface ValidationIssue {
@@ -53,12 +57,36 @@ export interface PatchPromptSource {
   framework?: string
 }
 
+/** Storage reference summary for an image attachment. Never contains raw bytes. */
+export interface PatchPromptImageAttachmentStorage {
+  provider: ImageAttachmentProvider
+  url?: string
+  objectKey?: string
+}
+
+/**
+ * Deterministic summary of an image attachment for AI patch context. Describes
+ * and references the uploaded image (name, type, size, dimensions, storage) but
+ * never carries the raw image content.
+ */
+export interface PatchPromptImageAttachment {
+  id: string
+  kind: "image"
+  name: string
+  mimeType: string
+  size: number
+  width?: number
+  height?: number
+  storage: PatchPromptImageAttachmentStorage
+}
+
 export interface PatchPromptAnnotation {
   id: string
   message: string
   createdAt: string
   target: PatchPromptTarget
   source?: PatchPromptSource
+  attachments?: PatchPromptImageAttachment[]
 }
 
 /**

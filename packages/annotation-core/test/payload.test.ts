@@ -4,7 +4,7 @@ import {
   buildAnnotationPayload,
   buildPageInfo,
 } from "../src/payload"
-import type { AnnotationTarget } from "../src/types"
+import type { AnnotationImageAttachment, AnnotationTarget } from "../src/types"
 
 const target: AnnotationTarget = {
   selector: "[data-annotation-id='el_test']",
@@ -36,6 +36,39 @@ describe("buildAnnotationItem", () => {
     const item = buildAnnotationItem({ message: "hi", target })
     expect(item.id).toMatch(/^anno_/)
     expect(item.createdAt).toEqual(expect.any(String))
+  })
+
+  it("includes attachments when provided", () => {
+    const attachment: AnnotationImageAttachment = {
+      id: "att_1",
+      kind: "image",
+      name: "shot.png",
+      mimeType: "image/png",
+      size: 1024,
+      storage: { provider: "server", url: "https://cdn/x.png" },
+    }
+    const item = buildAnnotationItem({
+      message: "see image",
+      target,
+      attachments: [attachment],
+      id: "anno_fixed",
+      createdAt: "2026-06-28T00:00:00.000Z",
+    })
+    expect(item.attachments).toEqual([attachment])
+  })
+
+  it("omits the attachments field when none are provided or the list is empty", () => {
+    const withNone = buildAnnotationItem({ message: "hi", target, id: "a", createdAt: "t" })
+    expect("attachments" in withNone).toBe(false)
+
+    const withEmpty = buildAnnotationItem({
+      message: "hi",
+      target,
+      attachments: [],
+      id: "a",
+      createdAt: "t",
+    })
+    expect("attachments" in withEmpty).toBe(false)
   })
 })
 

@@ -11,8 +11,11 @@ import {
   validateUnifiedDiffTargetFiles,
 } from "@web-annotation/node"
 import type { RepoSourceContextOptions } from "@web-annotation/node"
+import { DEFAULT_MAX_IMAGE_BYTES } from "@web-annotation/core"
 import { createTaskStore } from "./store"
 import type { Task, TaskStore } from "./store"
+import { validateImageUpload } from "./imageStorage"
+import type { ImageStorageProvider } from "./imageStorage"
 import { buildMockPatchProposal } from "./mockPatch"
 import {
   buildPatchProviderInput,
@@ -51,13 +54,23 @@ export interface PlatformRuntimeOptions {
    * inject a fake reader so unit tests never depend on real git.
    */
   readRepoHeadCommit?: RepoHeadCommitReader
+  /**
+   * Pluggable image storage for `POST /api/uploads/images`. The host can back it
+   * with a real object store (e.g. OSS) without exposing secrets to the browser.
+   * When absent, the upload endpoint returns `409`.
+   */
+  imageStorageProvider?: ImageStorageProvider
+  /** Max decoded image size in bytes for uploads. Default: 5 MiB. */
+  maxImageBytes?: number
 }
 
 export interface PlatformServerOptions extends PlatformRuntimeOptions {
   /** Inject a custom store (e.g. for tests or a future persistent backend). */
   store?: TaskStore
-  /** Max accepted HTTP JSON body size in bytes. Default: 1 MiB. */
+  /** Max accepted HTTP JSON body size in bytes for non-upload routes. Default: 1 MiB. */
   maxBodyBytes?: number
+  /** Max accepted HTTP body size in bytes for the image upload route. Default: 8 MiB. */
+  maxUploadBytes?: number
 }
 
 export interface PlatformServer {
@@ -79,6 +92,8 @@ export interface PlatformResponse {
 }
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+const DEFAULT_MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+const IMAGE_UPLOAD_PATH = "/api/uploads/images"
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -137,6 +152,42 @@ function readJsonBody(req: IncomingMessage, maxBodyBytes: number): Promise<unkno
       reject(error)
     })
   })
+}
+
+async function handleImageUpload(
+  body: unknown,
+  options: PlatformRuntimeOptions,
+): Promise<PlatformResponse> {
+  const provider = options.imageStorageProvider
+  if (!provider) {
+    return { status: 409, body: { error: "image storage is not configured" } }
+  }
+  const maxImageBytes = options.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES
+  const validation = validateImageUpload(body, maxImageBytes)
+  if (!validation.ok) {
+    return { status: validation.status, body: { error: validation.error } }
+  }
+  const attachment = await provider.store(validation.input)
+  return { status: 201, body: { attachment } }
+}
+
+async function serveUploadedImage(
+  path: string,
+  options: PlatformRuntimeOptions,
+): Promise<PlatformResponse> {
+  const provider = options.imageStorageProvider
+  if (!provider || !provider.retrieve) {
+    return { status: 404, body: { error: "not found" } }
+  }
+  const objectKey = decodeURIComponent(path.slice(`${IMAGE_UPLOAD_PATH}/`.length))
+  if (objectKey === "") {
+    return { status: 404, body: { error: "not found" } }
+  }
+  const stored = await provider.retrieve(objectKey)
+  if (!stored) {
+    return { status: 404, body: { error: "image not found", objectKey } }
+  }
+  return { status: 200, contentType: stored.mimeType, body: stored.data }
 }
 
 function createAnnotationTask(body: unknown, store: TaskStore): PlatformResponse {
@@ -373,6 +424,12 @@ export async function handlePlatformRequest(
   if (method === "POST" && path === "/api/annotations") {
     return createAnnotationTask(input.body, store)
   }
+  if (method === "POST" && path === IMAGE_UPLOAD_PATH) {
+    return handleImageUpload(input.body, options)
+  }
+  if (method === "GET" && path.startsWith(`${IMAGE_UPLOAD_PATH}/`)) {
+    return serveUploadedImage(path, options)
+  }
   if (method === "GET" && path === "/api/tasks") {
     return { status: 200, body: { tasks: store.list() } }
   }
@@ -421,6 +478,7 @@ async function handleHttpRequest(
   res: ServerResponse,
   store: TaskStore,
   maxBodyBytes: number,
+  maxUploadBytes: number,
   options: PlatformRuntimeOptions,
 ): Promise<void> {
   const method = req.method ?? "GET"
@@ -428,8 +486,10 @@ async function handleHttpRequest(
   let body: unknown
 
   if (method === "POST") {
+    // The upload route accepts a larger base64 body; other routes keep the small cap.
+    const cap = path === IMAGE_UPLOAD_PATH ? maxUploadBytes : maxBodyBytes
     try {
-      body = await readJsonBody(req, maxBodyBytes)
+      body = await readJsonBody(req, cap)
     } catch (error) {
       if (error instanceof HttpRequestError) {
         sendJson(res, error.status, { error: error.message })
@@ -442,11 +502,13 @@ async function handleHttpRequest(
   const response = await handlePlatformRequest({ method, path, body }, store, options)
   const contentType = response.contentType ?? "application/json; charset=utf-8"
   res.writeHead(response.status, { "content-type": contentType })
-  res.end(
-    contentType.startsWith("application/json")
-      ? JSON.stringify(response.body)
-      : String(response.body),
-  )
+  if (response.body instanceof Uint8Array) {
+    res.end(Buffer.from(response.body))
+  } else if (contentType.startsWith("application/json")) {
+    res.end(JSON.stringify(response.body))
+  } else {
+    res.end(String(response.body))
+  }
 }
 
 /**
@@ -457,14 +519,17 @@ async function handleHttpRequest(
 export function createPlatformServer(options: PlatformServerOptions = {}): PlatformServer {
   const store = options.store ?? createTaskStore()
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
+  const maxUploadBytes = options.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES
   const runtimeOptions: PlatformRuntimeOptions = {
     repoRoot: options.repoRoot,
     sourceContext: options.sourceContext,
     patchProvider: options.patchProvider,
     readRepoHeadCommit: options.readRepoHeadCommit ?? createGitHeadCommitReader(),
+    imageStorageProvider: options.imageStorageProvider,
+    maxImageBytes: options.maxImageBytes,
   }
   const server = createServer((req, res) => {
-    handleHttpRequest(req, res, store, maxBodyBytes, runtimeOptions).catch((error) => {
+    handleHttpRequest(req, res, store, maxBodyBytes, maxUploadBytes, runtimeOptions).catch((error) => {
       console.error("[platform-starter] request failed", error)
       if (!res.headersSent) {
         sendJson(res, 500, { error: "internal server error" })

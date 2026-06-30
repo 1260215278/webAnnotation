@@ -1,4 +1,5 @@
 import type { AnnotationPayload } from "@web-annotation/core"
+import { isImageAttachmentMimeType } from "@web-annotation/core"
 import type {
   SourceManifest,
   ValidateManifestResult,
@@ -47,6 +48,27 @@ function optPositiveInteger(value: unknown, path: string, issues: ValidationIssu
       path,
       message: `expected positive integer or undefined, got ${describe(value)}`,
     })
+  }
+}
+
+function reqNonEmptyString(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (typeof value !== "string") {
+    issues.push({ path, message: `expected string, got ${describe(value)}` })
+    return
+  }
+  if (value.trim() === "") {
+    issues.push({ path, message: "must not be empty" })
+  }
+}
+
+function optNonEmptyString(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (value === undefined) return
+  if (typeof value !== "string") {
+    issues.push({ path, message: `expected string or undefined, got ${describe(value)}` })
+    return
+  }
+  if (value.trim() === "") {
+    issues.push({ path, message: "must not be empty" })
   }
 }
 
@@ -165,6 +187,122 @@ function validateTarget(value: unknown, path: string, issues: ValidationIssue[])
   }
 }
 
+/**
+ * Keys that would smuggle raw image content into a payload that is meant to
+ * carry only a reference to an already-uploaded object.
+ */
+const FORBIDDEN_ATTACHMENT_KEYS = ["data", "base64", "content", "dataUrl", "bytes", "buffer", "blob"]
+
+/**
+ * Find the path of the first forbidden raw-content key anywhere inside the
+ * attachment subtree (top level, `storage`, `metadata`, nested objects/arrays),
+ * so raw bytes cannot be smuggled one level down from the top-level guard.
+ */
+function findForbiddenContentPath(value: unknown, base: string): string | undefined {
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++) {
+      const found = findForbiddenContentPath(value[index], `${base}[${index}]`)
+      if (found) return found
+    }
+    return undefined
+  }
+  if (isObject(value)) {
+    for (const key of Object.keys(value)) {
+      const childPath = `${base}.${key}`
+      if (FORBIDDEN_ATTACHMENT_KEYS.includes(key)) return childPath
+      const found = findForbiddenContentPath(value[key], childPath)
+      if (found) return found
+    }
+  }
+  return undefined
+}
+
+/** Reject a storage reference that inlines raw bytes via a `data:` URL. */
+function rejectDataUrl(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (typeof value === "string" && /^\s*data:/i.test(value)) {
+    issues.push({ path, message: "must not be a data: URL carrying raw image content" })
+  }
+}
+
+function validateAttachmentStorage(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (value === undefined) {
+    issues.push({ path, message: "missing required field" })
+    return
+  }
+  if (!isObject(value)) {
+    issues.push({ path, message: `expected object, got ${describe(value)}` })
+    return
+  }
+  if (value.provider !== "server" && value.provider !== "oss" && value.provider !== "custom") {
+    issues.push({
+      path: `${path}.provider`,
+      message: `expected "server" | "oss" | "custom", got ${describe(value.provider)}`,
+    })
+  }
+  optNonEmptyString(value.url, `${path}.url`, issues)
+  optNonEmptyString(value.objectKey, `${path}.objectKey`, issues)
+  optNonEmptyString(value.uploadId, `${path}.uploadId`, issues)
+  rejectDataUrl(value.url, `${path}.url`, issues)
+  rejectDataUrl(value.objectKey, `${path}.objectKey`, issues)
+  const hasUrl = typeof value.url === "string" && value.url.trim() !== ""
+  const hasObjectKey = typeof value.objectKey === "string" && value.objectKey.trim() !== ""
+  if (!hasUrl && !hasObjectKey) {
+    issues.push({
+      path,
+      message: "must reference an uploaded image via a non-empty url or objectKey",
+    })
+  }
+}
+
+function validateAttachmentItem(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (!isObject(value)) {
+    issues.push({ path, message: `expected object, got ${describe(value)}` })
+    return
+  }
+  if (value.kind !== "image") {
+    issues.push({ path: `${path}.kind`, message: `expected "image", got ${describe(value.kind)}` })
+  }
+  reqNonEmptyString(value.id, `${path}.id`, issues)
+  reqNonEmptyString(value.name, `${path}.name`, issues)
+  reqNonEmptyString(value.mimeType, `${path}.mimeType`, issues)
+  if (typeof value.mimeType === "string" && value.mimeType.trim() !== "" &&
+    !isImageAttachmentMimeType(value.mimeType)) {
+    issues.push({
+      path: `${path}.mimeType`,
+      message: `unsupported image type ${JSON.stringify(value.mimeType)}`,
+    })
+  }
+  reqPositiveInteger(value.size, `${path}.size`, issues)
+  optPositiveInteger(value.width, `${path}.width`, issues)
+  optPositiveInteger(value.height, `${path}.height`, issues)
+  validateAttachmentStorage(value.storage, `${path}.storage`, issues)
+  if (value.metadata !== undefined && !isObject(value.metadata)) {
+    issues.push({
+      path: `${path}.metadata`,
+      message: `expected object or undefined, got ${describe(value.metadata)}`,
+    })
+  }
+  // Reject any raw-content key anywhere in the attachment (incl. storage/metadata).
+  const forbiddenPath = findForbiddenContentPath(value, path)
+  if (forbiddenPath) {
+    issues.push({
+      path: forbiddenPath,
+      message: "raw image content must not be carried in the payload",
+    })
+  }
+}
+
+function validateAttachments(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (value === undefined) return
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: `expected array or undefined, got ${describe(value)}` })
+    return
+  }
+  value.forEach((item, index) => {
+    validateAttachmentItem(item, `${path}[${index}]`, issues)
+  })
+}
+
 function validateAnnotationItem(value: unknown, path: string, issues: ValidationIssue[]): void {
   if (!isObject(value)) {
     issues.push({ path, message: `expected object, got ${describe(value)}` })
@@ -174,6 +312,7 @@ function validateAnnotationItem(value: unknown, path: string, issues: Validation
   reqString(value.message, `${path}.message`, issues)
   reqString(value.createdAt, `${path}.createdAt`, issues)
   validateTarget(value.target, `${path}.target`, issues)
+  validateAttachments(value.attachments, `${path}.attachments`, issues)
 }
 
 function validateAnnotations(value: unknown, issues: ValidationIssue[]): void {

@@ -1,4 +1,7 @@
 import { ANNOTATION_UI_ATTR } from "./selector"
+import { createImageList, type ImageList } from "./imageList"
+import type { ImageItemStatus, ImageListConfig, ImageListItem } from "./imageList"
+import type { RuntimeLabels } from "./i18n"
 
 const Z_INDEX_OVERLAY = "2147483647"
 const GAP = 8
@@ -15,13 +18,23 @@ export interface Overlay {
   destroy: () => void
   setSubmitting: (submitting: boolean) => void
   setError: (message: string) => void
+  /** Currently selected images, in insertion order. Empty when images are disabled. */
+  getImages: () => ImageListItem[]
+  /** Update the per-image upload status indicator. */
+  setImageStatus: (id: string, status: ImageItemStatus, message?: string) => void
 }
 
 /**
  * A small floating panel with a textarea, anchored next to the locked element.
- * Enter submits, Shift+Enter inserts a newline, Esc cancels.
+ * Enter submits, Shift+Enter inserts a newline, Esc cancels. When `imageConfig`
+ * is provided, an image picker with thumbnails is shown below the textarea.
  */
-export function createOverlay(doc: Document, callbacks: OverlayCallbacks): Overlay {
+export function createOverlay(
+  doc: Document,
+  callbacks: OverlayCallbacks,
+  labels: RuntimeLabels,
+  imageConfig?: ImageListConfig,
+): Overlay {
   const panel = doc.createElement("div")
   panel.setAttribute(ANNOTATION_UI_ATTR, "overlay")
   Object.assign(panel.style, {
@@ -41,7 +54,7 @@ export function createOverlay(doc: Document, callbacks: OverlayCallbacks): Overl
 
   const textarea = doc.createElement("textarea")
   textarea.setAttribute(ANNOTATION_UI_ATTR, "overlay-input")
-  textarea.placeholder = "Describe the change… (Enter to submit, Esc to cancel)"
+  textarea.placeholder = labels.placeholder
   Object.assign(textarea.style, {
     width: "100%",
     minHeight: "64px",
@@ -61,9 +74,10 @@ export function createOverlay(doc: Document, callbacks: OverlayCallbacks): Overl
     fontSize: "11px",
     color: "#6b7280",
   })
-  hint.textContent = "Enter submit · Shift+Enter newline · Esc cancel"
+  hint.textContent = labels.hint
 
   const error = doc.createElement("div")
+  error.setAttribute(ANNOTATION_UI_ATTR, "overlay-error")
   Object.assign(error.style, {
     marginTop: "6px",
     fontSize: "11px",
@@ -72,6 +86,16 @@ export function createOverlay(doc: Document, callbacks: OverlayCallbacks): Overl
   })
 
   panel.appendChild(textarea)
+
+  let imageList: ImageList | null = null
+  if (imageConfig) {
+    imageList = createImageList(doc, labels, imageConfig, (message) => {
+      error.textContent = message
+      error.style.display = "block"
+    })
+    panel.appendChild(imageList.element)
+  }
+
   panel.appendChild(hint)
   panel.appendChild(error)
   doc.body.appendChild(panel)
@@ -120,26 +144,35 @@ export function createOverlay(doc: Document, callbacks: OverlayCallbacks): Overl
       error.textContent = ""
       textarea.value = ""
       textarea.disabled = false
+      imageList?.reset()
+      imageList?.setDisabled(false)
       panel.style.display = "block"
       position(el)
       textarea.focus()
     },
     close() {
       panel.style.display = "none"
+      imageList?.reset()
     },
     destroy() {
       textarea.removeEventListener("keydown", handleKeydown)
+      imageList?.destroy()
       panel.remove()
     },
     setSubmitting(submitting) {
       textarea.disabled = submitting
-      hint.textContent = submitting
-        ? "Submitting…"
-        : "Enter submit · Shift+Enter newline · Esc cancel"
+      imageList?.setDisabled(submitting)
+      hint.textContent = submitting ? labels.submitting : labels.hint
     },
     setError(message) {
       error.textContent = message
       error.style.display = message ? "block" : "none"
+    },
+    getImages() {
+      return imageList ? imageList.getItems() : []
+    },
+    setImageStatus(id, status, message) {
+      imageList?.setStatus(id, status, message)
     },
   }
 }

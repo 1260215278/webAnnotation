@@ -45,6 +45,20 @@ function makeSourcePayload(): unknown {
             framework: "react",
           },
         },
+        attachments: [
+          {
+            id: "att_1",
+            kind: "image",
+            name: "screenshot.png",
+            mimeType: "image/png",
+            size: 4096,
+            storage: {
+              provider: "server",
+              url: "https://cdn.example.com/screenshot.png",
+              objectKey: "screenshot.png",
+            },
+          },
+        ],
       },
     ],
   }
@@ -166,7 +180,11 @@ describe("provider-http-mock end-to-end", () => {
     expect(patchProposal.suggestedFiles).toEqual(["src/App.tsx"])
     expect(patchProposal.diffPreview).toContain("--- a/src/App.tsx")
     expect(patchProposal.diffPreview).toContain("+++ b/src/App.tsx")
-    expect(patchProposal.metadata).toMatchObject({ provider: "example-http-mock" })
+    // The provider saw the image-attachment summary inside the request promptContext.
+    expect(patchProposal.metadata).toMatchObject({
+      provider: "example-http-mock",
+      imageAttachmentCount: 1,
+    })
 
     const artifactRes = await request("GET", `/api/tasks/${taskId}/patch-artifact`)
     expect(artifactRes.status).toBe(200)
@@ -174,6 +192,9 @@ describe("provider-http-mock end-to-end", () => {
       artifact: {
         version: string
         taskId: string
+        annotations: Array<{
+          attachments?: Array<{ name: string; mimeType: string; storage: { url?: string } }>
+        }>
         patchProposal: { summary: string; suggestedFiles: string[]; diffPreview: string }
         safety: { appliesPatch: boolean; writesFiles: boolean; requiresHumanReview: boolean }
       }
@@ -185,6 +206,13 @@ describe("provider-http-mock end-to-end", () => {
     expect(artifact.patchProposal.summary).toContain("Mock HTTP provider proposing")
     expect(artifact.patchProposal.suggestedFiles).toEqual(["src/App.tsx"])
     expect(artifact.patchProposal.diffPreview).toContain("src/App.tsx")
+    // The artifact carries the attachment metadata (reference only, no raw bytes).
+    expect(artifact.annotations[0].attachments?.[0]).toMatchObject({
+      name: "screenshot.png",
+      mimeType: "image/png",
+      storage: { url: "https://cdn.example.com/screenshot.png" },
+    })
+    expect(JSON.stringify(artifact)).not.toContain("base64")
     expect(artifact.safety).toMatchObject({ appliesPatch: false, writesFiles: false })
     // Round-trips through JSON without functions/DOM handles.
     expect(JSON.parse(JSON.stringify(artifact))).toEqual(artifact)

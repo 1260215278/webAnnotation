@@ -19,9 +19,16 @@ export {
   createPatchArtifactSafety,
 } from "./patchArtifact"
 export { createHttpPatchProvider } from "./httpPatchProvider"
+export { createOpenAICompatiblePatchProvider } from "./openaiPatchProvider"
 export { createGitHeadCommitReader } from "./repoMetadata"
-export { createPlatformServerOptionsFromEnv, readPlatformPortFromEnv } from "./env"
+export {
+  createPlatformServerOptionsFromEnv,
+  describePatchProviderStartup,
+  readPlatformPortFromEnv,
+  resolvePatchProviderKind,
+} from "./env"
 export { renderConsoleHtml } from "./console"
+export { createMemoryImageStorage, validateImageUpload } from "./imageStorage"
 
 export type {
   PlatformRequest,
@@ -47,5 +54,14 @@ export type { PatchProvider, PatchProviderInput, PatchProviderResult } from "./p
 export type { PatchReviewInput } from "./patchReview"
 export type { PatchArtifact, PatchArtifactSafety } from "./patchArtifact"
 export type { HttpPatchProviderOptions } from "./httpPatchProvider"
+export type { OpenAICompatiblePatchProviderOptions } from "./openaiPatchProvider"
 export type { RepoHeadCommitReader } from "./repoMetadata"
-export type { PlatformEnvDependencies } from "./env"
+export type { PlatformEnvDependencies, PatchProviderKind } from "./env"
+export type {
+  ImageStorageProvider,
+  MemoryImageStorage,
+  MemoryImageStorageOptions,
+  StoreImageInput,
+  StoredImage,
+  ImageUploadValidation,
+} from "./imageStorage"

@@ -1,4 +1,5 @@
 import { ANNOTATION_UI_ATTR } from "./selector"
+import type { RuntimeLabels } from "./i18n"
 
 const Z_INDEX_WIDGET = "2147483645"
 
@@ -8,11 +9,11 @@ export interface Widget {
 }
 
 /** A floating toggle button anchored to the bottom-right corner. */
-export function createWidget(doc: Document, onToggle: () => void): Widget {
+export function createWidget(doc: Document, onToggle: () => void, labels: RuntimeLabels): Widget {
   const button = doc.createElement("button")
   button.type = "button"
   button.setAttribute(ANNOTATION_UI_ATTR, "widget")
-  button.textContent = "Annotate"
+  button.textContent = labels.widgetEnable
   Object.assign(button.style, {
     position: "fixed",
     right: "16px",
@@ -40,7 +41,7 @@ export function createWidget(doc: Document, onToggle: () => void): Widget {
   return {
     setActive(active) {
       button.style.background = active ? "#2563eb" : "#111827"
-      button.textContent = active ? "Annotating…" : "Annotate"
+      button.textContent = active ? labels.widgetActive : labels.widgetEnable
     },
     destroy() {
       button.removeEventListener("click", handleClick)

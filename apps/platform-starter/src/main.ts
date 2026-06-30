@@ -1,8 +1,14 @@
 import { createPlatformServer } from "./server"
-import { createPlatformServerOptionsFromEnv, readPlatformPortFromEnv } from "./env"
+import {
+  createPlatformServerOptionsFromEnv,
+  describePatchProviderStartup,
+  readPlatformPortFromEnv,
+  resolvePatchProviderKind,
+} from "./env"
 
 const port = readPlatformPortFromEnv(process.env)
 const options = createPlatformServerOptionsFromEnv(process.env)
+const patchProviderKind = resolvePatchProviderKind(process.env)
 const { server } = createPlatformServer(options)
 
 server.listen(port, () => {
@@ -14,9 +20,10 @@ server.listen(port, () => {
   } else {
     console.log(`[platform-starter] repo source context disabled`)
   }
-  if (options.patchProvider) {
-    console.log(`[platform-starter] HTTP patch provider enabled`)
+  console.log(`[platform-starter] ${describePatchProviderStartup(patchProviderKind)}`)
+  if (options.imageStorageProvider) {
+    console.log(`[platform-starter] image storage enabled`)
   } else {
-    console.log(`[platform-starter] patch provider disabled`)
+    console.log(`[platform-starter] image storage disabled`)
   }
 })

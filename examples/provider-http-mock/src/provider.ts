@@ -60,12 +60,22 @@ export function buildMockProviderResult(request: MockProviderRequest): PatchProv
   const suggestedFiles = [...new Set(annotations.map(locatorFor))]
   const diffPreview = annotations.map(hunkFor).join("\n\n")
   const summary = `Mock HTTP provider proposing ${annotations.length} change(s) across ${suggestedFiles.length} file(s).`
+  // The provider can read the image-attachment summaries already present in the
+  // prompt context (filename, type, size, storage reference) — never raw bytes.
+  const imageAttachmentCount = annotations.reduce(
+    (total, annotation) => total + (annotation.attachments?.length ?? 0),
+    0,
+  )
 
   return {
     summary,
     suggestedFiles,
     diffPreview,
-    metadata: { provider: "example-http-mock", annotationCount: annotations.length },
+    metadata: {
+      provider: "example-http-mock",
+      annotationCount: annotations.length,
+      imageAttachmentCount,
+    },
   }
 }
 

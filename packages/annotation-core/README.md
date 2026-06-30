@@ -4,13 +4,10 @@ Browser runtime SDK for web annotation. Lets a user point at a DOM element, writ
 a note (optionally attaching screenshots), and submit a deterministic
 `AnnotationPayload v1` to your backend.
 
-> Status: prepared for the first npm publish (`0.1.0`); not yet published at the
-> time of this commit. Part of the [webAnnotation](https://github.com/1260215278/webAnnotation)
+> Status: published on npm as `@web-annotation/core@0.1.0`. Part of the [webAnnotation](https://github.com/1260215278/webAnnotation)
 > monorepo.
 
 ## Install
-
-Once published:
 
 ```sh
 pnpm add @web-annotation/core

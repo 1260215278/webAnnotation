@@ -50,7 +50,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@web-annotation/core": "workspace:*"
+    "@web-annotation/core": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

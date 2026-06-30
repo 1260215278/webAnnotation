@@ -5,13 +5,12 @@ Local CLI for previewing and applying webAnnotation patch artifacts
 proposed diff, and can apply it through `git apply` behind explicit confirmation
 flags.
 
-> Status: prepared for the first npm publish (`0.1.0`); not yet published at the
-> time of this commit. Part of the [webAnnotation](https://github.com/1260215278/webAnnotation)
+> Status: published on npm as `@web-annotation/cli@0.1.0`. Part of the [webAnnotation](https://github.com/1260215278/webAnnotation)
 > monorepo.
 
 ## Install
 
-Once published, run without installing:
+Run without installing:
 
 ```sh
 pnpm dlx @web-annotation/cli preview --file artifact.json

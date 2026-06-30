@@ -4,7 +4,7 @@ AI-first web annotation toolkit for turning page feedback into structured code-c
 
 `webAnnotation` lets a host web app enter annotation mode, select a DOM element, write a note, and submit an `AnnotationPayload v1` to a configured backend. The long-term goal is to connect those payloads to AI patch generation, PR/MR review, and local CLI patch workflows.
 
-> Status: early MVP in development. The runtime SDK, React source metadata Vite plugin, Node protocol kit, CLI, and local examples exist in this repository. The publishable packages are configured and prepared for their first npm release (`0.1.0`) but are **not published to npm yet** as of this commit. The `apps/platform-starter` app and the `examples/*` packages are intentionally private and are not published.
+> Status: early MVP in development. The runtime SDK, React source metadata Vite plugin, Node protocol kit, CLI, and local examples exist in this repository. The publishable packages are available on npm at `0.1.0`. The `apps/platform-starter` app and the `examples/*` packages are intentionally private and are not published.
 
 ## Current MVP
 
@@ -81,12 +81,11 @@ Still planned:
 - Browser/server detection of image `width`/`height` for the built-in JSON/base64 upload path (today they are populated only when the host's `uploadImage` or upload server supplies them; the field is optional).
 - Persistent storage for the platform.
 - CLI push and PR/MR delivery (the CLI currently pulls an exported artifact over HTTP, previews artifacts, runs apply dry-run/preflight, checks patch applicability, applies to the working tree with explicit confirmation, and can apply on a new local branch with a local commit).
-- The first npm release: the `@web-annotation/core`, `/node`, `/vite`, and `/cli` packages are configured for publish (license, metadata, `publishConfig.access: public`, build artifacts) and pass `pnpm publish --dry-run`, but the actual first publish to npm has not happened yet.
+- npm publishing beyond `0.1.0`: future releases still need the usual version bump, pack/tarball checks, and npm publish flow.
 
 ## Install From npm
 
-> These packages are prepared for their first publish (`0.1.0`) but are **not on
-> npm yet** as of this commit. Once published, install the ones you need:
+Install the packages you need from npm:
 
 ```sh
 pnpm add @web-annotation/core       # browser Runtime SDK

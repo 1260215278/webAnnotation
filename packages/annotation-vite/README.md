@@ -4,13 +4,10 @@ Vite plugin that injects React (JSX/TSX) source metadata so annotated DOM
 elements can be mapped back to their source location. Pairs with
 [`@web-annotation/core`](https://www.npmjs.com/package/@web-annotation/core).
 
-> Status: prepared for the first npm publish (`0.1.0`); not yet published at the
-> time of this commit. Part of the [webAnnotation](https://github.com/1260215278/webAnnotation)
+> Status: published on npm as `@web-annotation/vite@0.1.0`. Part of the [webAnnotation](https://github.com/1260215278/webAnnotation)
 > monorepo.
 
 ## Install
-
-Once published:
 
 ```sh
 pnpm add -D @web-annotation/vite

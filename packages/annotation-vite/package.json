@@ -50,7 +50,7 @@
   "dependencies": {
     "@babel/core": "^7.26.0",
     "@babel/types": "^7.26.0",
-    "@web-annotation/core": "workspace:*"
+    "@web-annotation/core": "0.1.0"
   },
   "peerDependencies": {
     "vite": "^5.0.0 || ^6.0.0"

@@ -3,6 +3,8 @@ packages:
   - "examples/*"
   - "apps/*"
 
+linkWorkspacePackages: true
+
 onlyBuiltDependencies:
   - esbuild
 allowBuilds:
